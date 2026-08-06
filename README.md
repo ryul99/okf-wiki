@@ -11,13 +11,13 @@ moves.
 Install the `okf` command directly from GitHub with `uv`:
 
 ```sh
-uv tool install git+https://github.com/ryul99/markdown-wiki.git
+uv tool install git+https://github.com/ryul99/okf-wiki.git
 ```
 
 Alternatively, install it with pip into the active Python environment:
 
 ```sh
-python -m pip install git+https://github.com/ryul99/markdown-wiki.git
+python -m pip install git+https://github.com/ryul99/okf-wiki.git
 ```
 
 After installation, verify the command is available:
