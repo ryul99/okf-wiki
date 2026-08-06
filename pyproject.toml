@@ -1,0 +1,43 @@
+[project]
+name = "okf-wiki"
+version = "0.1.0"
+description = "A file-native CLI for Open Knowledge Format bundles"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "ruamel-yaml>=0.18.10,<0.19",
+]
+
+[project.scripts]
+okf = "okf_cli.cli:main"
+
+[dependency-groups]
+dev = [
+  "mypy>=1.17,<2",
+  "pre-commit>=4.2,<5",
+  "pytest>=8.4,<9",
+  "ruff>=0.12,<0.13",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/okf_cli"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["okf_cli"]

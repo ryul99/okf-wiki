@@ -1,0 +1,173 @@
+"""Link and citation inspection shared by commands and validation."""
+
+from __future__ import annotations
+
+from collections import Counter
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+
+from okf_cli.markdown import footnotes, resolve_destination, scan_links
+from okf_cli.model import concept_id, iter_markdown, parse_document
+
+
+@dataclass(frozen=True)
+class LinkRecord:
+    source: str
+    line: int
+    destination: str
+    resolved_path: str | None
+    external: bool
+    broken: bool
+    outside_bundle: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class CheckDiagnostic:
+    severity: str
+    code: str
+    file: str
+    line: int | None
+    message: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def links_for_file(root: Path, path: Path) -> list[LinkRecord]:
+    document = parse_document(path)
+    text = document.text_body
+    body_line_offset = document.prefix.count(b"\n")
+    records: list[LinkRecord] = []
+    source_name = (
+        concept_id(root, path)
+        if path.name not in {"index.md", "log.md"}
+        else path.relative_to(root).as_posix()
+    )
+    for link in scan_links(text):
+        resolved = resolve_destination(root, path, link.destination)
+        relative = (
+            resolved.resolved.relative_to(root).as_posix()
+            if resolved.resolved is not None
+            else None
+        )
+        records.append(
+            LinkRecord(
+                source_name,
+                link.line + body_line_offset,
+                link.destination,
+                relative,
+                resolved.external,
+                not resolved.external
+                and (resolved.resolved is None or not resolved.resolved.exists()),
+                resolved.outside,
+            )
+        )
+    return records
+
+
+def all_links(root: Path, path: Path | None = None) -> list[LinkRecord]:
+    return [
+        record for source in iter_markdown(root, path) for record in links_for_file(root, source)
+    ]
+
+
+def link_diagnostics(root: Path, path: Path | None = None) -> list[CheckDiagnostic]:
+    diagnostics: list[CheckDiagnostic] = []
+    for record in all_links(root, path):
+        if record.outside_bundle:
+            diagnostics.append(
+                CheckDiagnostic(
+                    "warning",
+                    "link-outside-bundle",
+                    record.source,
+                    record.line,
+                    f"internal link escapes the bundle: {record.destination}",
+                )
+            )
+        elif record.broken:
+            diagnostics.append(
+                CheckDiagnostic(
+                    "warning",
+                    "broken-link",
+                    record.source,
+                    record.line,
+                    f"internal link target does not exist: {record.destination}",
+                )
+            )
+    return diagnostics
+
+
+def citation_diagnostics(root: Path, path: Path | None = None) -> list[CheckDiagnostic]:
+    diagnostics: list[CheckDiagnostic] = []
+    for source in iter_markdown(root, path):
+        if source.name in {"index.md", "log.md"}:
+            continue
+        document = parse_document(source, require_frontmatter=True)
+        if document.frontmatter is None:
+            continue
+        file_name = concept_id(root, source)
+        source_entries = document.frontmatter.get("sources", [])
+        ids: list[str] = []
+        if isinstance(source_entries, list):
+            for entry in source_entries:
+                if isinstance(entry, Mapping) and isinstance(entry.get("id"), str):
+                    ids.append(entry["id"])
+        uses, definitions = footnotes(document.text_body)
+        body_line_offset = document.prefix.count(b"\n")
+        uses = [(label, line + body_line_offset) for label, line in uses]
+        definitions = [(label, line + body_line_offset) for label, line in definitions]
+        id_counts = Counter(ids)
+        definition_counts = Counter(label for label, _ in definitions)
+        used_labels = {label for label, _ in uses}
+        defined_labels = {label for label, _ in definitions}
+        known_ids = set(ids)
+        for source_id, count in id_counts.items():
+            if count > 1:
+                diagnostics.append(
+                    CheckDiagnostic(
+                        "warning",
+                        "duplicate-source-id",
+                        file_name,
+                        None,
+                        f"duplicate source ID: {source_id}",
+                    )
+                )
+        for label, count in definition_counts.items():
+            if count > 1:
+                line = next(line for item, line in definitions if item == label)
+                diagnostics.append(
+                    CheckDiagnostic(
+                        "warning",
+                        "duplicate-footnote-definition",
+                        file_name,
+                        line,
+                        f"duplicate footnote definition: {label}",
+                    )
+                )
+        for label, line in sorted((*uses, *definitions), key=lambda item: item[1]):
+            if label not in known_ids:
+                diagnostics.append(
+                    CheckDiagnostic(
+                        "warning",
+                        "unmatched-footnote",
+                        file_name,
+                        line,
+                        f"footnote has no matching source ID: {label}",
+                    )
+                )
+        for source_id in sorted(known_ids - (used_labels | defined_labels)):
+            diagnostics.append(
+                CheckDiagnostic(
+                    "warning",
+                    "unused-source",
+                    file_name,
+                    None,
+                    f"source ID is not referenced by a body footnote: {source_id}",
+                )
+            )
+    return diagnostics
