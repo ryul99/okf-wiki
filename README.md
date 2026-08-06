@@ -1,6 +1,6 @@
 # OKF Wiki CLI
 
-`okf` manages file-based [Open Knowledge Format](OKF.md) v0.2 bundles while
+`okf` manages file-based [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) v0.2 bundles while
 keeping Markdown files authoritative. It creates and inspects concepts, safely
 updates YAML frontmatter, validates bundles, searches content, checks links and
 citations, reports trust and lifecycle state, and performs recoverable concept
