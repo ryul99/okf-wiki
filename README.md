@@ -43,6 +43,16 @@ claude plugin marketplace add ryul99/ai-tools
 claude plugin install okf-wiki@ryul99-ai-tools
 ```
 
+Claude Code users can optionally install the autosave companion:
+
+```sh
+claude plugin install okf-wiki-autosave@ryul99-ai-tools
+```
+
+The base `okf-wiki` plugin installs no hooks. The companion uses the active
+Claude subscription login to maintain existing shared concepts tagged
+`worklog-managed` after turns; it does not create per-session documents.
+
 Run the agent inside an OKF bundle, or optionally set its default wiki root:
 
 ```sh
