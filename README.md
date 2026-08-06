@@ -6,6 +6,26 @@ updates YAML frontmatter, validates bundles, searches content, checks links and
 citations, reports trust and lifecycle state, and performs recoverable concept
 moves.
 
+## Installation
+
+Install the `okf` command directly from GitHub with `uv`:
+
+```sh
+uv tool install git+https://github.com/ryul99/markdown-wiki.git
+```
+
+Alternatively, install it with pip into the active Python environment:
+
+```sh
+python -m pip install git+https://github.com/ryul99/markdown-wiki.git
+```
+
+After installation, verify the command is available:
+
+```sh
+okf --help
+```
+
 ## Development
 
 This project uses Python 3.11 or newer and [`uv`](https://docs.astral.sh/uv/).
