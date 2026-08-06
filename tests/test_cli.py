@@ -35,6 +35,59 @@ def init_bundle(tmp_path: Path) -> Path:
     return bundle
 
 
+def test_help_describes_each_command(tmp_path: Path) -> None:
+    top_level = run_okf("--help", cwd=tmp_path).stdout
+    for description in (
+        "Initialize a new OKF bundle.",
+        "Create a new concept.",
+        "List concepts in the bundle.",
+        "Show a concept's contents.",
+        "Search concept metadata and content.",
+        "Read or update concept metadata.",
+        "Add or remove concept tags.",
+        "Manage a concept's sources.",
+        "Record a concept verification.",
+        "Manage concept lifecycle state.",
+        "Inspect links between concepts.",
+        "Inspect source citations.",
+        "Validate an OKF bundle or path.",
+        "Move a concept and update its links.",
+    ):
+        assert description in top_level
+
+    nested_commands = {
+        "meta": (
+            "Get metadata from a concept.",
+            "Set a metadata value on a concept.",
+            "Remove a metadata value from a concept.",
+        ),
+        "tag": ("Add tags to a concept.", "Remove tags from a concept."),
+        "source": (
+            "List sources for a concept.",
+            "Add a source to a concept.",
+            "Remove a source from a concept.",
+        ),
+        "lifecycle": (
+            "Set a concept's lifecycle status.",
+            "Set when a concept becomes stale.",
+            "Clear when a concept becomes stale.",
+            "Report concept lifecycle state.",
+        ),
+        "links": (
+            "List links from a concept.",
+            "List links to a concept.",
+            "Check links for problems.",
+        ),
+        "citations": ("Check citations for problems.",),
+    }
+    for command, descriptions in nested_commands.items():
+        output = run_okf(command, "--help", cwd=tmp_path).stdout
+        for description in descriptions:
+            assert description in output
+
+    assert "Create a new concept." in run_okf("new", "--help", cwd=tmp_path).stdout
+
+
 def write_concept(bundle: Path, relative: str, frontmatter: str, body: str = "") -> Path:
     path = bundle / relative
     path.parent.mkdir(parents=True, exist_ok=True)

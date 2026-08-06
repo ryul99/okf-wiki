@@ -793,6 +793,14 @@ def _add_filters(parser: argparse.ArgumentParser, *, today: bool = True) -> None
     _common(parser, today=today)
 
 
+def _command(
+    commands: argparse._SubParsersAction[ArgumentParser],
+    name: str,
+    description: str,
+) -> ArgumentParser:
+    return commands.add_parser(name, help=description, description=description)
+
+
 def build_parser() -> ArgumentParser:
     parser = ArgumentParser(prog="okf", description="Manage an Open Knowledge Format bundle")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -801,14 +809,14 @@ def build_parser() -> ArgumentParser:
     parser.add_argument("--today")
     commands = parser.add_subparsers(dest="command", required=True)
 
-    init = commands.add_parser("init")
+    init = _command(commands, "init", "Initialize a new OKF bundle.")
     init.add_argument("path", nargs="?")
     init.add_argument("--version", default="0.2")
     _common(init)
     _dry(init)
     init.set_defaults(handler=cmd_init)
 
-    new = commands.add_parser("new")
+    new = _command(commands, "new", "Create a new concept.")
     new.add_argument("concept")
     new.add_argument("--type", dest="concept_type", required=True)
     new.add_argument("--title")
@@ -821,12 +829,12 @@ def build_parser() -> ArgumentParser:
     _dry(new)
     new.set_defaults(handler=cmd_new)
 
-    listing = commands.add_parser("list")
+    listing = _command(commands, "list", "List concepts in the bundle.")
     listing.add_argument("path", nargs="?")
     _add_filters(listing)
     listing.set_defaults(handler=cmd_list)
 
-    show = commands.add_parser("show")
+    show = _command(commands, "show", "Show a concept's contents.")
     show.add_argument("concept")
     selection = show.add_mutually_exclusive_group()
     selection.add_argument("--frontmatter-only", action="store_true")
@@ -834,21 +842,21 @@ def build_parser() -> ArgumentParser:
     _common(show, formats=("text", "yaml", "json"))
     show.set_defaults(handler=cmd_show)
 
-    search = commands.add_parser("search")
+    search = _command(commands, "search", "Search concept metadata and content.")
     search.add_argument("query")
     search.add_argument("--metadata-only", action="store_true")
     search.add_argument("--case-sensitive", action="store_true")
     _add_filters(search)
     search.set_defaults(handler=cmd_search)
 
-    meta = commands.add_parser("meta")
+    meta = _command(commands, "meta", "Read or update concept metadata.")
     meta_commands = meta.add_subparsers(dest="meta_action", required=True)
-    meta_get = meta_commands.add_parser("get")
+    meta_get = _command(meta_commands, "get", "Get metadata from a concept.")
     meta_get.add_argument("concept")
     meta_get.add_argument("key", nargs="?")
     _common(meta_get)
     meta_get.set_defaults(handler=cmd_meta_get)
-    meta_set = meta_commands.add_parser("set")
+    meta_set = _command(meta_commands, "set", "Set a metadata value on a concept.")
     meta_set.add_argument("concept")
     meta_set.add_argument("key")
     meta_set.add_argument("value")
@@ -858,30 +866,34 @@ def build_parser() -> ArgumentParser:
     _common(meta_set)
     _dry(meta_set)
     meta_set.set_defaults(handler=cmd_meta_set)
-    meta_unset = meta_commands.add_parser("unset")
+    meta_unset = _command(meta_commands, "unset", "Remove a metadata value from a concept.")
     meta_unset.add_argument("concept")
     meta_unset.add_argument("key")
     _common(meta_unset)
     _dry(meta_unset)
     meta_unset.set_defaults(handler=cmd_meta_unset)
 
-    tag = commands.add_parser("tag")
+    tag = _command(commands, "tag", "Add or remove concept tags.")
     tag_commands = tag.add_subparsers(dest="tag_action", required=True)
-    for action in ("add", "remove"):
-        action_parser = tag_commands.add_parser(action)
+    tag_descriptions = {
+        "add": "Add tags to a concept.",
+        "remove": "Remove tags from a concept.",
+    }
+    for action, description in tag_descriptions.items():
+        action_parser = _command(tag_commands, action, description)
         action_parser.add_argument("concept")
         action_parser.add_argument("tags", nargs="+")
         _common(action_parser)
         _dry(action_parser)
         action_parser.set_defaults(handler=cmd_tag)
 
-    source = commands.add_parser("source")
+    source = _command(commands, "source", "Manage a concept's sources.")
     source_commands = source.add_subparsers(dest="source_action", required=True)
-    source_list = source_commands.add_parser("list")
+    source_list = _command(source_commands, "list", "List sources for a concept.")
     source_list.add_argument("concept")
     _common(source_list)
     source_list.set_defaults(handler=cmd_source_list)
-    source_add = source_commands.add_parser("add")
+    source_add = _command(source_commands, "add", "Add a source to a concept.")
     source_add.add_argument("concept")
     source_add.add_argument("--resource", required=True)
     source_add.add_argument("--id", dest="source_id")
@@ -894,7 +906,7 @@ def build_parser() -> ArgumentParser:
     _common(source_add)
     _dry(source_add)
     source_add.set_defaults(handler=cmd_source_add)
-    source_remove = source_commands.add_parser("remove")
+    source_remove = _command(source_commands, "remove", "Remove a source from a concept.")
     source_remove.add_argument("concept")
     source_choice = source_remove.add_mutually_exclusive_group(required=True)
     source_choice.add_argument("--id", dest="source_id")
@@ -903,7 +915,7 @@ def build_parser() -> ArgumentParser:
     _dry(source_remove)
     source_remove.set_defaults(handler=cmd_source_remove)
 
-    verify = commands.add_parser("verify")
+    verify = _command(commands, "verify", "Record a concept verification.")
     verify.add_argument("concept")
     verify.add_argument("--by", required=True)
     verify.add_argument("--at")
@@ -911,59 +923,65 @@ def build_parser() -> ArgumentParser:
     _dry(verify)
     verify.set_defaults(handler=cmd_verify)
 
-    lifecycle = commands.add_parser("lifecycle")
+    lifecycle = _command(commands, "lifecycle", "Manage concept lifecycle state.")
     lifecycle_commands = lifecycle.add_subparsers(dest="lifecycle_action", required=True)
-    set_status = lifecycle_commands.add_parser("set-status")
+    set_status = _command(lifecycle_commands, "set-status", "Set a concept's lifecycle status.")
     set_status.add_argument("concept")
     set_status.add_argument("value", choices=("draft", "stable", "deprecated"))
     _common(set_status)
     _dry(set_status)
     set_status.set_defaults(handler=cmd_lifecycle_mutate)
-    set_stale = lifecycle_commands.add_parser("set-stale-after")
+    set_stale = _command(lifecycle_commands, "set-stale-after", "Set when a concept becomes stale.")
     set_stale.add_argument("concept")
     set_stale.add_argument("value")
     _common(set_stale)
     _dry(set_stale)
     set_stale.set_defaults(handler=cmd_lifecycle_mutate)
-    clear_stale = lifecycle_commands.add_parser("clear-stale-after")
+    clear_stale = _command(
+        lifecycle_commands, "clear-stale-after", "Clear when a concept becomes stale."
+    )
     clear_stale.add_argument("concept")
     _common(clear_stale)
     _dry(clear_stale)
     clear_stale.set_defaults(handler=cmd_lifecycle_mutate)
-    report = lifecycle_commands.add_parser("report")
+    report = _command(lifecycle_commands, "report", "Report concept lifecycle state.")
     report.add_argument("--stale", action="store_true")
     report.add_argument("--due-before")
     _common(report, today=True)
     report.set_defaults(handler=cmd_lifecycle_report)
 
-    links = commands.add_parser("links")
+    links = _command(commands, "links", "Inspect links between concepts.")
     links_commands = links.add_subparsers(dest="links_action", required=True)
-    for action in ("outgoing", "backlinks"):
-        action_parser = links_commands.add_parser(action)
+    link_descriptions = {
+        "outgoing": "List links from a concept.",
+        "backlinks": "List links to a concept.",
+    }
+    for action, description in link_descriptions.items():
+        action_parser = _command(links_commands, action, description)
         action_parser.add_argument("concept")
         _common(action_parser)
         action_parser.set_defaults(handler=cmd_links)
-    links_check = links_commands.add_parser("check")
+    links_check = _command(links_commands, "check", "Check links for problems.")
     links_check.add_argument("path", nargs="?")
     links_check.add_argument("--warnings-as-errors", action="store_true")
     _common(links_check)
     links_check.set_defaults(handler=cmd_links)
 
-    citations = commands.add_parser("citations")
+    citations = _command(commands, "citations", "Inspect source citations.")
     citations_commands = citations.add_subparsers(dest="citations_action", required=True)
-    citations_check = citations_commands.add_parser("check")
+    citations_check = _command(citations_commands, "check", "Check citations for problems.")
     citations_check.add_argument("path", nargs="?")
     citations_check.add_argument("--warnings-as-errors", action="store_true")
     _common(citations_check)
     citations_check.set_defaults(handler=cmd_citations)
 
-    validate = commands.add_parser("validate")
+    validate = _command(commands, "validate", "Validate an OKF bundle or path.")
     validate.add_argument("path", nargs="?")
     validate.add_argument("--warnings-as-errors", action="store_true")
     _common(validate, today=True)
     validate.set_defaults(handler=cmd_validate)
 
-    move = commands.add_parser("move")
+    move = _command(commands, "move", "Move a concept and update its links.")
     move.add_argument("source")
     move.add_argument("destination")
     _common(move, today=True)
