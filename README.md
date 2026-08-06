@@ -26,6 +26,33 @@ After installation, verify the command is available:
 okf --help
 ```
 
+## Codex and Claude Code skill
+
+The `okf-wiki` plugin helps Codex and Claude Code inspect, update, validate,
+and safely move OKF concepts using the installed `okf` command.
+
+Install it from the `ryul99-ai-tools` marketplace:
+
+```sh
+# Codex
+codex plugin marketplace add ryul99/ai-tools
+codex plugin add okf-wiki@ryul99-ai-tools
+
+# Claude Code
+claude plugin marketplace add ryul99/ai-tools
+claude plugin install okf-wiki@ryul99-ai-tools
+```
+
+Run the agent inside an OKF bundle, or optionally set its default wiki root:
+
+```sh
+export OKF_ROOT=/path/to/wiki
+```
+
+Then ask it to search concepts, edit metadata, check links and citations,
+validate the bundle, or move a concept safely. If no bundle or `OKF_ROOT` is
+available, the skill asks for the wiki root.
+
 ## Development
 
 This project uses Python 3.11 or newer and [`uv`](https://docs.astral.sh/uv/).
