@@ -26,10 +26,11 @@ After installation, verify the command is available:
 okf --help
 ```
 
-## Codex and Claude Code skill
+## Codex and Claude Code plugins
 
-The `okf-wiki` plugin helps Codex and Claude Code inspect, update, validate,
-and safely move OKF concepts using the installed `okf` command.
+The base `okf-wiki` plugin helps Codex and Claude Code inspect, update,
+validate, and safely move OKF concepts using the installed `okf` command. It
+does not install hooks.
 
 Install it from the `ryul99-ai-tools` marketplace:
 
@@ -43,15 +44,27 @@ claude plugin marketplace add ryul99/ai-tools
 claude plugin install okf-wiki@ryul99-ai-tools
 ```
 
-Claude Code users can optionally install the autosave companion:
+Codex and Claude Code users can optionally install the autosave companion
+after installing the base plugin:
 
 ```sh
+# Codex
+codex plugin add okf-wiki-autosave@ryul99-ai-tools
+
+# Claude Code
 claude plugin install okf-wiki-autosave@ryul99-ai-tools
 ```
 
-The base `okf-wiki` plugin installs no hooks. The companion uses the active
-Claude subscription login to maintain existing shared concepts tagged
-`worklog-managed` after turns; it does not create per-session documents.
+After installing the companion in Codex, open `/hooks` and trust its hook
+definition. The companion uses the active matching Codex or Claude Code
+subscription login to journal meaningful work after main-agent turns. It
+creates or updates concepts under `worklog/` by default, groups entries under
+per-day headings, and tags worklogs with `autosave-worklog`. Every write is
+validated and rolled back if validation fails; `index.md` and `log.md` are
+never modified.
+
+Autosave requires `okf` and the host CLI (`codex` or `claude`) on `PATH`, plus
+an OKF bundle in the current directory hierarchy or an `OKF_ROOT` value.
 
 Run the agent inside an OKF bundle, or optionally set its default wiki root:
 
