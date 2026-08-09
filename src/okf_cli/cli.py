@@ -487,6 +487,42 @@ def cmd_meta_unset(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tag_list(args: argparse.Namespace) -> int:
+    root = _root(args, inspection=True)
+    target = _target_path(root, args.path)
+    counts: dict[str, int] = {}
+    for path in iter_concepts(root, target):
+        document = parse_document(path, require_frontmatter=True)
+        if document.frontmatter is None:
+            continue
+        tags = document.frontmatter.get("tags", [])
+        if not isinstance(tags, list):
+            continue
+        unique_tags = {tag for tag in tags if isinstance(tag, str) and tag}
+        for tag in unique_tags:
+            counts[tag] = counts.get(tag, 0) + 1
+
+    sorted_tags = sorted(counts)
+    if _format(args) == "json":
+        _json(
+            [{"tag": tag, "count": counts[tag]} for tag in sorted_tags]
+            if args.counts
+            else sorted_tags
+        )
+    elif args.counts and sorted_tags:
+        print_table(
+            (
+                TableColumn("Tag", style="cyan", ratio=1),
+                TableColumn("Count", no_wrap=True),
+            ),
+            ((tag, counts[tag]) for tag in sorted_tags),
+        )
+    else:
+        for tag in sorted_tags:
+            print(tag)
+    return 0
+
+
 def cmd_tag(args: argparse.Namespace) -> int:
     root = _prepare_mutation(args)
     document = require_mutable_document(root, args.concept)
@@ -928,8 +964,13 @@ def build_parser() -> ArgumentParser:
     _dry(meta_unset)
     meta_unset.set_defaults(handler=cmd_meta_unset)
 
-    tag = _command(commands, "tag", "Add or remove concept tags.")
+    tag = _command(commands, "tag", "List, add, or remove concept tags.")
     tag_commands = tag.add_subparsers(dest="tag_action", required=True)
+    tag_list = _command(tag_commands, "list", "List tags in the bundle.")
+    tag_list.add_argument("path", nargs="?")
+    tag_list.add_argument("--counts", action="store_true")
+    _common(tag_list)
+    tag_list.set_defaults(handler=cmd_tag_list)
     tag_descriptions = {
         "add": "Add tags to a concept.",
         "remove": "Remove tags from a concept.",

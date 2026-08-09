@@ -44,7 +44,7 @@ def test_help_describes_each_command(tmp_path: Path) -> None:
         "Show a concept's contents.",
         "Search concept metadata and content.",
         "Read or update concept metadata.",
-        "Add or remove concept tags.",
+        "List, add, or remove concept tags.",
         "Manage a concept's sources.",
         "Record a concept verification.",
         "Manage concept lifecycle state.",
@@ -61,7 +61,11 @@ def test_help_describes_each_command(tmp_path: Path) -> None:
             "Set a metadata value on a concept.",
             "Remove a metadata value from a concept.",
         ),
-        "tag": ("Add tags to a concept.", "Remove tags from a concept."),
+        "tag": (
+            "List tags in the bundle.",
+            "Add tags to a concept.",
+            "Remove tags from a concept.",
+        ),
         "source": (
             "List sources for a concept.",
             "Add a source to a concept.",
@@ -209,6 +213,46 @@ def test_metadata_mutations_preserve_body_and_unknown_fields(tmp_path: Path) -> 
     ambiguous = run_okf("meta", "set", "notes/example", "enabled", "true", cwd=bundle, expected=2)
     assert "explicit --type" in ambiguous.stderr
     run_okf("meta", "unset", "notes/example", "type", cwd=bundle, expected=2)
+
+
+def test_tag_list_supports_paths_counts_and_json(tmp_path: Path) -> None:
+    bundle = init_bundle(tmp_path)
+    write_concept(
+        bundle,
+        "teams/sales.md",
+        "type: Note\ntags:\n- sales\n- shared\n- shared",
+    )
+    write_concept(
+        bundle,
+        "teams/analytics.md",
+        "type: Note\ntags:\n- analytics\n- shared",
+    )
+    write_concept(bundle, "overview.md", "type: Note\ntags:\n- global")
+    write_concept(bundle, "untagged.md", "type: Note")
+
+    listed = run_okf("tag", "list", cwd=bundle)
+    assert listed.stdout == "analytics\nglobal\nsales\nshared\n"
+
+    scoped = run_okf("tag", "list", "teams", "--format", "json", cwd=bundle)
+    assert json.loads(scoped.stdout) == ["analytics", "sales", "shared"]
+
+    counted = run_okf("tag", "list", "--counts", "--format", "json", cwd=bundle)
+    assert json.loads(counted.stdout) == [
+        {"tag": "analytics", "count": 1},
+        {"tag": "global", "count": 1},
+        {"tag": "sales", "count": 1},
+        {"tag": "shared", "count": 2},
+    ]
+
+    counted_text = run_okf("tag", "list", "--counts", cwd=bundle).stdout
+    for value in ("Tag", "Count", "analytics", "global", "sales", "shared", "2"):
+        assert value in counted_text
+
+    empty_parent = tmp_path / "empty"
+    empty_parent.mkdir()
+    empty_bundle = init_bundle(empty_parent)
+    assert run_okf("tag", "list", cwd=empty_bundle).stdout == ""
+    assert json.loads(run_okf("tag", "list", "--format", "json", cwd=empty_bundle).stdout) == []
 
 
 def test_provenance_verification_lifecycle_and_filters(tmp_path: Path) -> None:

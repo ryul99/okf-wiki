@@ -314,9 +314,17 @@ rules.
 Manage the frontmatter `tags` list.
 
 ```bash
+okf tag list [path] [--counts]
 okf tag add <concept-id> <tag>...
 okf tag remove <concept-id> <tag>...
 ```
+
+`tag list` returns distinct tags in lexical order. The optional path limits the
+scan to a concept or directory. Default text output prints one tag per line;
+`--counts` reports the number of concepts using each tag. JSON output is an
+array of tag strings by default and an array of objects containing `tag` and
+`count` when `--counts` is used. An empty result is successful and produces no
+text, or an empty JSON array.
 
 Tags are deduplicated while preserving their existing order. Removing a tag
 that is not present is a successful no-op.

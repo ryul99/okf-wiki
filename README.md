@@ -87,6 +87,24 @@ Every mutating command accepts `--dry-run`. Read and validation commands, as
 well as move plans, support stable machine-readable output with
 `--format json`.
 
+## Inspect tags
+
+List the distinct tags used in a bundle, optionally scoped to a concept or
+directory:
+
+```sh
+uv run okf tag list
+uv run okf tag list tables
+```
+
+Tags are sorted and printed one per line. Add `--counts` to show the number of
+concepts using each tag, or `--format json` for machine-readable output:
+
+```sh
+uv run okf tag list --counts
+uv run okf tag list --format json
+```
+
 ## Interrupted move recovery
 
 Move transactions use hidden `.okf-transaction-*` directories inside the
