@@ -44,6 +44,7 @@ from okf_cli.model import (
     yaml_plain,
 )
 from okf_cli.move import build_move_plan, execute_move, recover_transactions
+from okf_cli.output import TableColumn, print_table
 from okf_cli.validation import validate_bundle
 
 Handler = Callable[[argparse.Namespace], int]
@@ -250,11 +251,27 @@ def cmd_list(args: argparse.Namespace) -> int:
     if _format(args) == "json":
         _json(records)
     else:
-        for item in records:
-            print(
-                f"{item['id']}\t{item['type'] or '-'}\t{item['title']}\t"
-                f"{item['status']}\t{item['trust']}\t{item['freshness']}"
-            )
+        print_table(
+            (
+                TableColumn("ID", style="cyan", ratio=2),
+                TableColumn("Type", ratio=1),
+                TableColumn("Title", ratio=2),
+                TableColumn("Status", no_wrap=True),
+                TableColumn("Trust", no_wrap=True),
+                TableColumn("Freshness", no_wrap=True),
+            ),
+            (
+                (
+                    item["id"],
+                    item["type"],
+                    item["title"],
+                    item["status"],
+                    item["trust"],
+                    item["freshness"],
+                )
+                for item in records
+            ),
+        )
     return 0
 
 
@@ -340,9 +357,23 @@ def cmd_search(args: argparse.Namespace) -> int:
     if _format(args) == "json":
         _json(results)
     else:
-        for result in results:
-            location = f":{result['line']}" if result["line"] is not None else ""
-            print(f"{result['id']}{location}\t{result['field']}\t{result['excerpt']}")
+        print_table(
+            (
+                TableColumn("Location", style="cyan", ratio=2),
+                TableColumn("Field", style="magenta", no_wrap=True),
+                TableColumn("Match", ratio=5),
+            ),
+            (
+                (
+                    f"{result['id']}:{result['line']}"
+                    if result["line"] is not None
+                    else result["id"],
+                    result["field"],
+                    result["excerpt"],
+                )
+                for result in results
+            ),
+        )
     return 0
 
 
@@ -671,11 +702,23 @@ def cmd_lifecycle_report(args: argparse.Namespace) -> int:
     if _format(args) == "json":
         _json(records)
     else:
-        for item in records:
-            print(
-                f"{item['id']}\t{item['status']}\t{item['stale_after'] or '-'}\t"
-                f"{item['latest_verification'] or '-'}"
-            )
+        print_table(
+            (
+                TableColumn("ID", style="cyan", ratio=2),
+                TableColumn("Status", no_wrap=True),
+                TableColumn("Stale After", no_wrap=True),
+                TableColumn("Last Verified", no_wrap=True),
+            ),
+            (
+                (
+                    item["id"],
+                    item["status"],
+                    item["stale_after"],
+                    item["latest_verification"],
+                )
+                for item in records
+            ),
+        )
     return 0
 
 
@@ -703,9 +746,21 @@ def cmd_links(args: argparse.Namespace) -> int:
     if _format(args) == "json":
         _json([record.as_dict() for record in records])
     else:
-        for record in records:
-            resolved = record.resolved_path or "external"
-            print(f"{record.source}:{record.line}\t{record.destination}\t{resolved}")
+        print_table(
+            (
+                TableColumn("Source", style="cyan", ratio=2),
+                TableColumn("Destination", ratio=2),
+                TableColumn("Resolved", ratio=2),
+            ),
+            (
+                (
+                    f"{record.source}:{record.line}",
+                    record.destination,
+                    record.resolved_path or "external",
+                )
+                for record in records
+            ),
+        )
     return 0
 
 

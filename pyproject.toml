@@ -5,6 +5,7 @@ description = "A file-native CLI for Open Knowledge Format bundles"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "rich>=14.1,<15",
   "ruamel-yaml>=0.18.10,<0.19",
 ]
 

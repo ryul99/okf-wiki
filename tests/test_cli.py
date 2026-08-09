@@ -132,6 +132,9 @@ def test_init_new_list_show_and_global_options(tmp_path: Path) -> None:
     assert shown[0]["id"] == "tables/orders"
     assert shown[0]["trust"] == "unverified"
     assert shown[0]["freshness"] == "fresh"
+    listing = run_okf("list", "--today", "2026-08-06", cwd=bundle).stdout
+    for value in ("ID", "Type", "Title", "Status", "Trust", "Freshness", "Orders"):
+        assert value in listing
 
     frontmatter = run_okf(
         "show", "tables/orders", "--frontmatter-only", "--format", "yaml", cwd=bundle
@@ -278,6 +281,9 @@ def test_provenance_verification_lifecycle_and_filters(tmp_path: Path) -> None:
         ).stdout
     )
     assert report[0]["latest_verification"].startswith("2026-07-02")
+    report_table = run_okf("lifecycle", "report", "--today", "2026-08-06", cwd=bundle).stdout
+    for value in ("ID", "Status", "Stale After", "Last Verified", "metric"):
+        assert value in report_table
     sources = json.loads(run_okf("source", "list", "metric", "--format", "json", cwd=bundle).stdout)
     assert sources[0]["usage_window"] == {"from": "2026-01-01", "to": "2026-06-30"}
 
@@ -303,12 +309,19 @@ def test_search_links_citations_and_validation_exit_codes(tmp_path: Path) -> Non
     results = json.loads(run_okf("search", "needle", "--format", "json", cwd=bundle).stdout)
     body_match = next(result for result in results if result["field"] == "body")
     assert body_match["line"] == 12
+    search_table = run_okf("search", "needle", cwd=bundle).stdout
+    for value in ("Location", "Field", "Match", "Needle"):
+        assert value in search_table
 
     outgoing = json.loads(
         run_okf("links", "outgoing", "source", "--format", "json", cwd=bundle).stdout
     )
     assert [record["destination"] for record in outgoing] == ["target.md", "missing.md"]
     assert outgoing[0]["line"] == 12
+    for action, concept in (("outgoing", "source"), ("backlinks", "target")):
+        links_table = run_okf("links", action, concept, cwd=bundle).stdout
+        for value in ("Source", "Destination", "Resolved", "target.md"):
+            assert value in links_table
     diagnostics = json.loads(run_okf("links", "check", "--format", "json", cwd=bundle).stdout)[
         "diagnostics"
     ]
