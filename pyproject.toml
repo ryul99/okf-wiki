@@ -1,6 +1,6 @@
 [project]
 name = "okf-wiki"
-version = "0.1.0"
+version = "0.2.0"
 description = "A file-native CLI for Open Knowledge Format bundles"
 readme = "README.md"
 requires-python = ">=3.11"
