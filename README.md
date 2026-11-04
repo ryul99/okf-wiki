@@ -59,9 +59,9 @@ After installing the companion in Codex, open `/hooks` and trust its hook
 definition. The companion uses the active matching Codex or Claude Code
 subscription login to journal meaningful work after main-agent turns. It
 creates or updates concepts under `worklog/` by default, groups entries under
-per-day headings, and tags worklogs with `autosave-worklog`. Every write is
-validated and rolled back if validation fails; `index.md` and `log.md` are
-never modified.
+per-day headings, and tags worklogs with `autosave-worklog`. Every body write
+goes through `okf body set --if-match`, so a concurrent edit is refused rather
+than overwritten; `index.md` and `log.md` are never modified.
 
 Autosave requires `okf` and the host CLI (`codex` or `claude`) on `PATH`, plus
 an OKF bundle in the current directory hierarchy or an `OKF_ROOT` value.
