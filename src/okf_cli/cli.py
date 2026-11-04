@@ -101,22 +101,28 @@ def _yaml_text(value: Any) -> str:
     return output.getvalue()
 
 
-def _display_change(
-    document: Document, proposed: bytes, dry_run: bool, *, payload: Any = None
+def _print_diff(document: Document, proposed: bytes) -> None:
+    before = document.raw.decode("utf-8").splitlines(keepends=True)
+    after = proposed.decode("utf-8").splitlines(keepends=True)
+    sys.stdout.writelines(
+        difflib.unified_diff(before, after, fromfile=str(document.path), tofile=str(document.path))
+    )
+
+
+def _finish_mutation(
+    root: Path,
+    args: argparse.Namespace,
+    document: Document,
+    proposed: bytes,
+    fields: Mapping[str, Any],
 ) -> None:
-    if dry_run:
-        if payload is not None:
-            _json(payload)
-            return
-        before = document.raw.decode("utf-8").splitlines(keepends=True)
-        after = proposed.decode("utf-8").splitlines(keepends=True)
-        sys.stdout.writelines(
-            difflib.unified_diff(
-                before, after, fromfile=str(document.path), tofile=str(document.path)
-            )
-        )
-    else:
+    changed = proposed != document.raw
+    if args.dry_run and _format(args) != "json":
+        _print_diff(document, proposed)
+    elif changed and not args.dry_run:
         atomic_write(document.path, proposed, expected_identity=document.identity)
+    if _format(args) == "json":
+        _json({"id": concept_id(root, document.path), **fields, "changed": changed})
 
 
 def _prepare_mutation(args: argparse.Namespace) -> Path:
@@ -198,18 +204,18 @@ def cmd_init(args: argparse.Namespace) -> int:
     if index.exists():
         raise UsageError(f"refusing to overwrite existing file: {index}")
     content = f'---\nokf_version: "{args.version}"\n---\n\n# Concepts\n'.encode()
-    if args.dry_run:
-        if _format(args) == "json":
-            _json({"path": str(index), "content": content.decode(), "created": False})
-        else:
-            sys.stdout.buffer.write(content)
-    else:
+    if not args.dry_run:
         target.mkdir(parents=True, exist_ok=True)
         atomic_write(index, content)
-        if _format(args) == "json":
-            _json({"path": str(index), "version": args.version, "created": True})
-        else:
-            print(f"initialized OKF bundle at {target}")
+    if _format(args) == "json":
+        payload: dict[str, Any] = {"path": str(index), "version": args.version, "changed": True}
+        if args.dry_run:
+            payload["content"] = content.decode()
+        _json(payload)
+    elif args.dry_run:
+        sys.stdout.buffer.write(content)
+    else:
+        print(f"initialized OKF bundle at {target}")
     return 0
 
 
@@ -234,31 +240,22 @@ def cmd_new(args: argparse.Namespace) -> int:
         metadata["generated"] = CommentedMap({"by": args.generated_by, "at": _utc_now()})
     document = Document(path, b"", metadata, b"\n", b"")
     proposed = document.render()
-    if args.dry_run:
-        if _format(args) == "json":
-            _json(
-                {
-                    "path": path.relative_to(root).as_posix(),
-                    "content": proposed.decode(),
-                    "generated_by": args.generated_by,
-                    "created": False,
-                }
-            )
-        else:
-            sys.stdout.buffer.write(proposed)
-    else:
+    if not args.dry_run:
         atomic_write(path, proposed)
-        if _format(args) == "json":
-            _json(
-                {
-                    "id": concept_id(root, path),
-                    "path": path.relative_to(root).as_posix(),
-                    "created": True,
-                    "generated_by": args.generated_by,
-                }
-            )
-        else:
-            print(concept_id(root, path))
+    if _format(args) == "json":
+        payload: dict[str, Any] = {
+            "id": concept_id(root, path),
+            "path": path.relative_to(root).as_posix(),
+            "generated_by": args.generated_by,
+            "changed": True,
+        }
+        if args.dry_run:
+            payload["content"] = proposed.decode()
+        _json(payload)
+    elif args.dry_run:
+        sys.stdout.buffer.write(proposed)
+    else:
+        print(concept_id(root, path))
     return 0
 
 
@@ -479,24 +476,7 @@ def cmd_meta_set(args: argparse.Namespace) -> int:
     if args.key == "type" and (not isinstance(value, str) or not value.strip()):
         raise UsageError("type must remain a non-empty string")
     dotted_set(document.frontmatter, args.key, value)
-    proposed = document.render()
-    _display_change(
-        document,
-        proposed,
-        args.dry_run,
-        payload={"path": concept_id(root, document.path), "key": args.key, "value": value}
-        if args.dry_run and _format(args) == "json"
-        else None,
-    )
-    if not args.dry_run and _format(args) == "json":
-        _json(
-            {
-                "path": concept_id(root, document.path),
-                "key": args.key,
-                "value": value,
-                "changed": proposed != document.raw,
-            }
-        )
+    _finish_mutation(root, args, document, document.render(), {"key": args.key, "value": value})
     return 0
 
 
@@ -506,18 +486,8 @@ def cmd_meta_unset(args: argparse.Namespace) -> int:
     root = _prepare_mutation(args)
     document = require_mutable_document(root, args.concept)
     assert document.frontmatter is not None
-    changed = dotted_unset(document.frontmatter, args.key)
-    proposed = document.render()
-    _display_change(
-        document,
-        proposed,
-        args.dry_run,
-        payload={"path": concept_id(root, document.path), "key": args.key, "changed": changed}
-        if args.dry_run and _format(args) == "json"
-        else None,
-    )
-    if not args.dry_run and _format(args) == "json":
-        _json({"path": concept_id(root, document.path), "key": args.key, "changed": changed})
+    dotted_unset(document.frontmatter, args.key)
+    _finish_mutation(root, args, document, document.render(), {"key": args.key})
     return 0
 
 
@@ -570,12 +540,12 @@ def cmd_body_set(args: argparse.Namespace) -> int:
     is_changed = proposed.raw != document.raw and not is_blocked
     is_written = is_changed and not args.dry_run
     if args.dry_run and _format(args) != "json":
-        _display_change(document, proposed.raw, True)
+        _print_diff(document, proposed.raw)
     elif is_written:
         atomic_write(document.path, proposed.raw, expected_identity=document.identity)
     if _format(args) == "json":
         payload: dict[str, Any] = {
-            "path": concept_id(root, document.path),
+            "id": concept_id(root, document.path),
             "changed": is_changed,
             "identity": proposed.identity if is_written else document.identity,
             "warnings": [item.as_dict() for item in warnings],
@@ -648,17 +618,7 @@ def cmd_tag(args: argparse.Namespace) -> int:
         document.frontmatter["tags"] = CommentedSeq(tags)
     else:
         document.frontmatter.pop("tags", None)
-    proposed = document.render()
-    _display_change(
-        document,
-        proposed,
-        args.dry_run,
-        payload={"path": concept_id(root, document.path), "tags": tags}
-        if args.dry_run and _format(args) == "json"
-        else None,
-    )
-    if not args.dry_run and _format(args) == "json":
-        _json({"path": concept_id(root, document.path), "tags": tags})
+    _finish_mutation(root, args, document, document.render(), {"tags": tags})
     return 0
 
 
@@ -714,17 +674,7 @@ def cmd_source_add(args: argparse.Namespace) -> int:
     updated = CommentedSeq(sources)
     updated.append(source)
     document.frontmatter["sources"] = updated
-    proposed = document.render()
-    _display_change(
-        document,
-        proposed,
-        args.dry_run,
-        payload={"path": concept_id(root, document.path), "added": source}
-        if args.dry_run and _format(args) == "json"
-        else None,
-    )
-    if not args.dry_run and _format(args) == "json":
-        _json({"path": concept_id(root, document.path), "added": source})
+    _finish_mutation(root, args, document, document.render(), {"added": source})
     return 0
 
 
@@ -750,22 +700,8 @@ def cmd_source_remove(args: argparse.Namespace) -> int:
         document.frontmatter["sources"] = CommentedSeq(updated)
     else:
         document.frontmatter.pop("sources", None)
-    proposed = document.render()
-    _display_change(
-        document,
-        proposed,
-        args.dry_run,
-        payload={"path": concept_id(root, document.path), "removed": len(sources) - len(updated)}
-        if args.dry_run and _format(args) == "json"
-        else None,
-    )
-    if not args.dry_run and _format(args) == "json":
-        _json(
-            {
-                "path": concept_id(root, document.path),
-                "removed": len(sources) - len(updated),
-            }
-        )
+    removed = len(sources) - len(updated)
+    _finish_mutation(root, args, document, document.render(), {"removed": removed})
     return 0
 
 
@@ -785,17 +721,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     events = normalize_verified(document.frontmatter.get("verified"))
     events.append(CommentedMap({"by": args.by, "at": at}))
     document.frontmatter["verified"] = CommentedSeq(events)
-    proposed = document.render()
-    _display_change(
-        document,
-        proposed,
-        args.dry_run,
-        payload={"path": concept_id(root, document.path), "verification": events[-1]}
-        if args.dry_run and _format(args) == "json"
-        else None,
-    )
-    if not args.dry_run and _format(args) == "json":
-        _json({"path": concept_id(root, document.path), "verification": events[-1]})
+    _finish_mutation(root, args, document, document.render(), {"verification": events[-1]})
     return 0
 
 
@@ -803,27 +729,17 @@ def cmd_lifecycle_mutate(args: argparse.Namespace) -> int:
     root = _prepare_mutation(args)
     document = require_mutable_document(root, args.concept)
     assert document.frontmatter is not None
+    fields: dict[str, Any] = {"key": args.key}
     if args.lifecycle_action == "unset":
         document.frontmatter.pop(args.key, None)
-    elif args.key == "status":
-        if args.value not in STATUSES:
-            raise UsageError(f"status must be one of: {', '.join(sorted(STATUSES))}")
-        document.frontmatter["status"] = args.value
     else:
-        if parse_date(args.value) is None:
+        if args.key == "status" and args.value not in STATUSES:
+            raise UsageError(f"status must be one of: {', '.join(sorted(STATUSES))}")
+        if args.key == "stale_after" and parse_date(args.value) is None:
             raise UsageError("stale_after must use YYYY-MM-DD")
-        document.frontmatter["stale_after"] = args.value
-    proposed = document.render()
-    _display_change(
-        document,
-        proposed,
-        args.dry_run,
-        payload={"path": concept_id(root, document.path), "metadata": document.frontmatter}
-        if args.dry_run and _format(args) == "json"
-        else None,
-    )
-    if not args.dry_run and _format(args) == "json":
-        _json({"path": concept_id(root, document.path), "metadata": document.frontmatter})
+        document.frontmatter[args.key] = args.value
+        fields["value"] = args.value
+    _finish_mutation(root, args, document, document.render(), fields)
     return 0
 
 
@@ -906,22 +822,16 @@ def cmd_validate(args: argparse.Namespace) -> int:
 def cmd_move(args: argparse.Namespace) -> int:
     root = _prepare_mutation(args)
     plan = build_move_plan(root, args.source, args.destination, _today(args))
-    if args.dry_run:
-        if _format(args) == "json":
-            _json(plan.as_dict())
-        else:
-            print(f"move {plan.source} -> {plan.destination}")
-            for change in plan.changes:
-                print(
-                    f"{change.file}: {change.kind} {change.location}: "
-                    f"{change.before} -> {change.after}"
-                )
-        return 0
-    execute_move(root, plan, _today(args))
+    if not args.dry_run:
+        execute_move(root, plan, _today(args))
     if _format(args) == "json":
-        payload = plan.as_dict()
-        payload["moved"] = True
-        _json(payload)
+        _json({**plan.as_dict(), "changed": True})
+    elif args.dry_run:
+        print(f"move {plan.source} -> {plan.destination}")
+        for change in plan.changes:
+            print(
+                f"{change.file}: {change.kind} {change.location}: {change.before} -> {change.after}"
+            )
     else:
         print(f"moved {plan.source} -> {plan.destination}")
     return 0

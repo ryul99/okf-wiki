@@ -341,7 +341,7 @@ unedited copy leaves the concept unchanged.
 - Write atomically with concurrent-change detection.
 
 `body set --dry-run` prints a unified diff. With `--format json`, `body set`
-returns `path`, `changed` (whether the file was or would be changed),
+returns `id`, `changed` (whether the file was or would be changed),
 `identity` (the SHA-256 of the file after the command), and `warnings`; a dry
 run also returns the proposed `body`.
 
@@ -569,6 +569,20 @@ Read and validation commands support:
 
 JSON output must be written to stdout. Diagnostics not represented in the JSON
 document must be written to stderr.
+
+Mutating commands also support `--format json`, and their results share these
+fields:
+
+- `changed`: whether the command changed a file, or with `--dry-run` would
+  change one. A frontmatter or body mutation that would leave the file's bytes
+  unchanged does not rewrite the file.
+- `id`: the concept ID for commands that act on one concept. `path` is used only
+  for file paths, such as the file `okf new` creates. `okf move` reports
+  `source` and `destination` concept IDs instead.
+
+A `--dry-run` result has the same fields as the real result, plus a preview of
+new content where the command writes one (`content` for `okf init` and
+`okf new`, `body` for `okf body set`).
 
 ### 7.2 Exit codes
 

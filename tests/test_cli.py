@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 
 def run_okf(
@@ -202,7 +203,7 @@ def test_metadata_mutations_preserve_body_and_unknown_fields(tmp_path: Path) -> 
         ).stdout
     )
     assert changed == {
-        "path": "notes/example",
+        "id": "notes/example",
         "key": "enabled",
         "value": True,
         "changed": True,
@@ -217,6 +218,45 @@ def test_metadata_mutations_preserve_body_and_unknown_fields(tmp_path: Path) -> 
     ambiguous = run_okf("meta", "set", "notes/example", "enabled", "true", cwd=bundle, expected=2)
     assert "explicit --type" in ambiguous.stderr
     run_okf("meta", "unset", "notes/example", "type", cwd=bundle, expected=2)
+
+
+def json_output(*arguments: str, cwd: Path) -> Any:
+    return json.loads(run_okf(*arguments, "--format", "json", cwd=cwd).stdout)
+
+
+def test_mutations_report_id_and_changed_in_json(tmp_path: Path) -> None:
+    bundle = init_bundle(tmp_path)
+    planned_concept = json_output("new", "notes/a", "--type", "Note", "--dry-run", cwd=bundle)
+    assert planned_concept["id"] == "notes/a"
+    assert planned_concept["path"] == "notes/a.md"
+    assert planned_concept["changed"] is True
+    assert "type: Note" in planned_concept["content"]
+    assert not (bundle / "notes/a.md").exists()
+
+    run_okf("new", "notes/a", "--type", "Note", cwd=bundle)
+    concept = bundle / "notes/a.md"
+    planned_tag = json_output("tag", "add", "notes/a", "x", "--dry-run", cwd=bundle)
+    assert planned_tag == {"id": "notes/a", "tags": ["x"], "changed": True}
+    assert b"tags" not in concept.read_bytes()
+
+    added = json_output("tag", "add", "notes/a", "x", cwd=bundle)
+    assert added == {"id": "notes/a", "tags": ["x"], "changed": True}
+    inode = concept.stat().st_ino
+    repeated = json_output("tag", "add", "notes/a", "x", cwd=bundle)
+    assert repeated["changed"] is False
+    assert concept.stat().st_ino == inode
+
+    lifecycle = json_output("lifecycle", "set", "notes/a", "status", "draft", cwd=bundle)
+    assert lifecycle == {"id": "notes/a", "key": "status", "value": "draft", "changed": True}
+    cleared = json_output("lifecycle", "unset", "notes/a", "status", cwd=bundle)
+    assert cleared == {"id": "notes/a", "key": "status", "changed": True}
+
+    moved = json_output("move", "notes/a", "notes/b", cwd=bundle)
+    assert (moved["source"], moved["destination"], moved["changed"]) == (
+        "notes/a",
+        "notes/b",
+        True,
+    )
 
 
 def frontmatter_bytes(path: Path) -> bytes:
