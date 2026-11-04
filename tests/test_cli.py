@@ -47,7 +47,7 @@ def test_help_describes_each_command(tmp_path: Path) -> None:
         "Show a concept's contents.",
         "Search concept metadata and content.",
         "Read or update concept metadata.",
-        "Write a concept's Markdown body.",
+        "Read or replace a concept's Markdown body.",
         "List, add, or remove concept tags.",
         "Manage a concept's sources.",
         "Record a concept verification.",
@@ -65,7 +65,10 @@ def test_help_describes_each_command(tmp_path: Path) -> None:
             "Set a metadata value on a concept.",
             "Remove a metadata value from a concept.",
         ),
-        "body": ("Replace a concept's body from a file or stdin.",),
+        "body": (
+            "Print a concept's Markdown body.",
+            "Replace a concept's body from a file or stdin.",
+        ),
         "tag": (
             "List tags in the bundle.",
             "Add tags to a concept.",
@@ -133,7 +136,7 @@ def test_init_new_list_show_and_global_options(tmp_path: Path) -> None:
     )
 
     source.write_bytes(source.read_bytes() + b"# Schema\r\n\r\nBody bytes.\r\n")
-    body = run_okf("show", "tables/orders", "--body-only", cwd=bundle).stdout
+    body = run_okf("body", "get", "tables/orders", cwd=bundle).stdout
     assert body == "\n# Schema\n\nBody bytes.\n"
     shown = json.loads(
         run_okf("list", "--format", "json", "--today", "2026-08-06", cwd=bundle).stdout
@@ -145,9 +148,7 @@ def test_init_new_list_show_and_global_options(tmp_path: Path) -> None:
     for value in ("ID", "Type", "Title", "Status", "Trust", "Freshness", "Orders"):
         assert value in listing
 
-    frontmatter = run_okf(
-        "show", "tables/orders", "--frontmatter-only", "--format", "yaml", cwd=bundle
-    ).stdout
+    frontmatter = run_okf("meta", "get", "tables/orders", cwd=bundle).stdout
     assert "type: BigQuery Table" in frontmatter
     shown_json = json.loads(run_okf("show", "tables/orders", "--format", "json", cwd=bundle).stdout)
     assert shown_json["frontmatter"]["type"] == "BigQuery Table"
@@ -240,9 +241,7 @@ def test_body_set_round_trips_show_output_and_keeps_frontmatter_bytes(tmp_path: 
     original = concept.read_bytes()
     original_frontmatter = frontmatter_bytes(concept)
     draft = tmp_path / "draft.md"
-    draft.write_text(
-        run_okf("show", "worklog/okf", "--body-only", cwd=bundle).stdout, encoding="utf-8"
-    )
+    draft.write_text(run_okf("body", "get", "worklog/okf", cwd=bundle).stdout, encoding="utf-8")
 
     unchanged = json.loads(
         run_okf(
@@ -279,7 +278,11 @@ def test_body_guards_identity_new_warnings_dry_run_and_reserved_files(tmp_path: 
     concept = write_concept(bundle, "notes/links.md", "type: Note", "See [missing](missing.md).\n")
     original = concept.read_bytes()
     shown = json.loads(run_okf("show", "notes/links", "--format", "json", cwd=bundle).stdout)
-    assert shown["identity"] == hashlib.sha256(original).hexdigest()
+    read_body = json.loads(
+        run_okf("body", "get", "notes/links", "--format", "json", cwd=bundle).stdout
+    )
+    assert shown["identity"] == read_body["identity"] == hashlib.sha256(original).hexdigest()
+    assert read_body["body"] == "See [missing](missing.md).\n"
 
     run_okf(
         "body",

@@ -118,21 +118,22 @@ uv run okf tag list --counts
 uv run okf tag list --format json
 ```
 
-## Write concept bodies
+## Read and write concept bodies
 
-Replace a concept's Markdown body from a file or stdin. The frontmatter bytes
-are kept exactly as they are:
+Read a concept's Markdown body, then replace it from a file or stdin. The
+frontmatter bytes are kept exactly as they are:
 
 ```sh
-uv run okf show notes/handoff --body-only > handoff.md
+uv run okf body get notes/handoff > handoff.md
 # Edit handoff.md, then write it back.
 uv run okf body set notes/handoff --from-file handoff.md
 
 printf '# Handoff\n\nNext: add tests.\n' | uv run okf body set notes/handoff
 ```
 
-Pass `--if-match` with the `identity` reported by `okf show --format json` to
-refuse a write when the file changed since it was read, and
+Pass `--if-match` with the `identity` reported by `okf body get --format json`
+or `okf show --format json` to refuse a write when the file changed since it
+was read, and
 `--warnings-as-errors` to refuse a write that introduces new link or citation
 warnings.
 

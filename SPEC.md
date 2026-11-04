@@ -240,15 +240,16 @@ and freshness. `--format json` returns structured records.
 Read a concept without modifying it.
 
 ```bash
-okf show <concept-id> [--frontmatter-only] [--body-only]
+okf show <concept-id>
 ```
 
-Default output is the complete source file. `--frontmatter-only` supports
-`text`, `yaml`, and `json` output. `--body-only` prints the body exactly as
-stored. The two selection flags are mutually exclusive.
+Text output is the complete source file. JSON output contains the concept ID,
+`identity` (the SHA-256 of the file's bytes, for use with
+`okf body set --if-match`), the parsed frontmatter, the body, and the complete
+source.
 
-JSON output for the complete file and for `--body-only` includes `identity`,
-the SHA-256 of the file's bytes, for use with `okf body --if-match`.
+Use `okf meta get` to read only the frontmatter and `okf body get` to read only
+the body.
 
 ### 6.5 `okf search`
 
@@ -290,6 +291,9 @@ okf meta set <concept-id> <key> <value> [--type string|number|boolean|date|json]
 okf meta unset <concept-id> <key>
 ```
 
+Without a key, `meta get` returns the complete frontmatter, printed as YAML in
+text output.
+
 Requirements:
 
 - Support dotted paths such as `generated.by`.
@@ -304,22 +308,26 @@ rules.
 
 ### 6.7 `okf body`
 
-Replace a concept's Markdown body.
+Read or replace a concept's Markdown body.
 
 ```bash
+okf body get <concept-id>
 okf body set <concept-id> [--from-file <path>] [--if-match <sha256>] [--warnings-as-errors]
 ```
 
-The new body is read from the file named by `--from-file`, or otherwise from
-standard input, and must be valid UTF-8. Without `--from-file`, the command
-refuses to run when standard input is a terminal, so it never waits for
-interactive input. The body is written exactly as supplied.
+`body get` prints the body exactly as stored. JSON output contains the concept
+ID, `identity`, and the body.
 
-`okf show --body-only` prints a body in the same form, so a person or agent can
-save it to a file, edit the file, and write it back with `--from-file`. Writing
-back an unedited copy leaves the concept unchanged.
+`body set` reads the new body from the file named by `--from-file`, or
+otherwise from standard input, and requires valid UTF-8. Without
+`--from-file`, it refuses to run when standard input is a terminal, so it never
+waits for interactive input. The body is written exactly as supplied.
 
-Requirements:
+A person or agent can therefore save the output of `body get` to a file, edit
+the file, and write it back with `body set --from-file`. Writing back an
+unedited copy leaves the concept unchanged.
+
+`body set` requirements:
 
 - Preserve the frontmatter bytes exactly; the frontmatter is not re-serialized.
 - Reject reserved files and concepts whose frontmatter cannot be parsed.
@@ -331,8 +339,8 @@ Requirements:
   new warnings leave the file unchanged and the command exits with code `1`.
 - Write atomically with concurrent-change detection.
 
-`--dry-run` prints a unified diff. With `--format json`, the command returns
-`path`, `changed` (whether the file was or would be changed),
+`body set --dry-run` prints a unified diff. With `--format json`, `body set`
+returns `path`, `changed` (whether the file was or would be changed),
 `identity` (the SHA-256 of the file after the command), and `warnings`; a dry
 run also returns the proposed `body`.
 

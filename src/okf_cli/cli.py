@@ -299,37 +299,35 @@ def cmd_show(args: argparse.Namespace) -> int:
     root = _root(args, inspection=True)
     path = concept_path(root, args.concept, allow_reserved=True)
     document = parse_document(path)
-    if args.frontmatter_only:
-        if document.frontmatter is None:
-            raise OperationalError(f"{path}: no frontmatter")
-        if _format(args) == "json":
-            _json(document.frontmatter)
-        else:
-            sys.stdout.write(_yaml_text(document.frontmatter))
-    elif args.body_only:
-        if _format(args) == "json":
-            _json(
-                {
-                    "id": concept_id(root, path),
-                    "identity": document.identity,
-                    "body": document.text_body,
-                }
-            )
-        else:
-            sys.stdout.buffer.write(document.body)
+    if _format(args) == "json":
+        _json(
+            {
+                "id": concept_id(root, path),
+                "identity": document.identity,
+                "frontmatter": document.frontmatter,
+                "body": document.text_body,
+                "source": document.raw.decode("utf-8"),
+            }
+        )
     else:
-        if _format(args) == "json":
-            _json(
-                {
-                    "id": concept_id(root, path),
-                    "identity": document.identity,
-                    "frontmatter": document.frontmatter,
-                    "body": document.text_body,
-                    "source": document.raw.decode("utf-8"),
-                }
-            )
-        else:
-            sys.stdout.buffer.write(document.raw)
+        sys.stdout.buffer.write(document.raw)
+    return 0
+
+
+def cmd_body_get(args: argparse.Namespace) -> int:
+    root = _root(args, inspection=True)
+    path = concept_path(root, args.concept, allow_reserved=True)
+    document = parse_document(path)
+    if _format(args) == "json":
+        _json(
+            {
+                "id": concept_id(root, path),
+                "identity": document.identity,
+                "body": document.text_body,
+            }
+        )
+    else:
+        sys.stdout.buffer.write(document.body)
     return 0
 
 
@@ -1033,10 +1031,7 @@ def build_parser() -> ArgumentParser:
 
     show = _command(commands, "show", "Show a concept's contents.")
     show.add_argument("concept")
-    selection = show.add_mutually_exclusive_group()
-    selection.add_argument("--frontmatter-only", action="store_true")
-    selection.add_argument("--body-only", action="store_true")
-    _common(show, formats=("text", "yaml", "json"))
+    _common(show)
     show.set_defaults(handler=cmd_show)
 
     search = _command(commands, "search", "Search concept metadata and content.")
@@ -1071,8 +1066,12 @@ def build_parser() -> ArgumentParser:
     _dry(meta_unset)
     meta_unset.set_defaults(handler=cmd_meta_unset)
 
-    body = _command(commands, "body", "Write a concept's Markdown body.")
+    body = _command(commands, "body", "Read or replace a concept's Markdown body.")
     body_commands = body.add_subparsers(dest="body_action", required=True)
+    body_get = _command(body_commands, "get", "Print a concept's Markdown body.")
+    body_get.add_argument("concept")
+    _common(body_get)
+    body_get.set_defaults(handler=cmd_body_get)
     body_set = _command(body_commands, "set", "Replace a concept's body from a file or stdin.")
     body_set.add_argument("concept")
     body_set.add_argument("--from-file")
