@@ -178,6 +178,7 @@ def _filters(args: argparse.Namespace) -> Filters:
 
 def _record(root: Path, path: Path, metadata: Mapping[str, Any], today: date) -> dict[str, Any]:
     stale = is_stale(metadata, today)
+    latest = latest_verification(metadata)
     return {
         "id": concept_id(root, path),
         "type": metadata.get("type"),
@@ -186,6 +187,7 @@ def _record(root: Path, path: Path, metadata: Mapping[str, Any], today: date) ->
         "trust": trust_tier(metadata),
         "freshness": "stale" if stale else "fresh",
         "stale_after": yaml_plain(metadata.get("stale_after")),
+        "latest_verification": latest.isoformat() if latest else None,
         "tags": yaml_plain(metadata.get("tags", [])),
     }
 
@@ -825,47 +827,6 @@ def cmd_lifecycle_mutate(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_lifecycle_report(args: argparse.Namespace) -> int:
-    root = _root(args, inspection=True)
-    filters = Filters(stale=args.stale, due_before=_filters(args).due_before)
-    today = _today(args)
-    records: list[dict[str, Any]] = []
-    for path in iter_concepts(root):
-        document = parse_document(path, require_frontmatter=True)
-        if document.frontmatter is None or not filters.matches(document.frontmatter, today):
-            continue
-        latest = latest_verification(document.frontmatter)
-        records.append(
-            {
-                "id": concept_id(root, path),
-                "status": status(document.frontmatter),
-                "stale_after": yaml_plain(document.frontmatter.get("stale_after")),
-                "latest_verification": latest.isoformat() if latest else None,
-            }
-        )
-    if _format(args) == "json":
-        _json(records)
-    else:
-        print_table(
-            (
-                TableColumn("ID", style="cyan", ratio=2),
-                TableColumn("Status", no_wrap=True),
-                TableColumn("Stale After", no_wrap=True),
-                TableColumn("Last Verified", no_wrap=True),
-            ),
-            (
-                (
-                    item["id"],
-                    item["status"],
-                    item["stale_after"],
-                    item["latest_verification"],
-                )
-                for item in records
-            ),
-        )
-    return 0
-
-
 def cmd_links(args: argparse.Namespace) -> int:
     root = _root(args, inspection=True)
     if args.links_action == "outgoing":
@@ -1159,11 +1120,6 @@ def build_parser() -> ArgumentParser:
     _common(lifecycle_unset)
     _dry(lifecycle_unset)
     lifecycle_unset.set_defaults(handler=cmd_lifecycle_mutate)
-    report = _command(lifecycle_commands, "report", "Report concept lifecycle state.")
-    report.add_argument("--stale", action="store_true")
-    report.add_argument("--due-before")
-    _common(report, today=True)
-    report.set_defaults(handler=cmd_lifecycle_report)
 
     links = _command(commands, "links", "Inspect links between concepts.")
     links_commands = links.add_subparsers(dest="links_action", required=True)

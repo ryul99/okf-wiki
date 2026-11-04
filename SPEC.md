@@ -233,7 +233,8 @@ Filters:
 - `--due-before YYYY-MM-DD`
 
 Default text output should include concept ID, type, title, status, trust tier,
-and freshness. `--format json` returns structured records.
+and freshness. `--format json` returns structured records that also include the
+stale date, the latest verification time when present, and tags.
 
 ### 6.4 `okf show`
 
@@ -400,13 +401,12 @@ earlier events.
 
 ### 6.11 `okf lifecycle`
 
-Update or report lifecycle metadata.
+Update lifecycle metadata.
 
 ```bash
 okf lifecycle set <concept-id> status draft|stable|deprecated
 okf lifecycle set <concept-id> stale_after YYYY-MM-DD
 okf lifecycle unset <concept-id> status|stale_after
-okf lifecycle report [--stale] [--due-before YYYY-MM-DD]
 ```
 
 `set` and `unset` accept only the lifecycle keys `status` and `stale_after`,
@@ -415,8 +415,7 @@ named as they appear in frontmatter. `set` rejects a status outside
 `YYYY-MM-DD`. `unset` removes the key; a concept without `status` is treated
 as `stable`.
 
-The report is read-only and includes concept ID, status, stale date, and the
-latest verification date when present.
+Use `okf list` with `--stale` or `--due-before` to report lifecycle state.
 
 ### 6.12 `okf links`
 
@@ -722,7 +721,8 @@ byte-for-byte identical.
 
 1. `okf source list`, `add`, and `remove`.
 2. `okf verify`.
-3. `okf lifecycle` mutation and reporting commands.
+3. `okf lifecycle` mutation commands and lifecycle reporting through
+   `okf list`.
 4. Trust-tier and freshness filters across `list` and `search`.
 
 These commands should reuse the mutation and validation foundations rather

@@ -82,7 +82,6 @@ def test_help_describes_each_command(tmp_path: Path) -> None:
         "lifecycle": (
             "Set a concept's lifecycle status or stale date.",
             "Remove a concept's lifecycle status or stale date.",
-            "Report concept lifecycle state.",
         ),
         "links": (
             "List links from a concept.",
@@ -464,15 +463,8 @@ def test_provenance_verification_lifecycle_and_filters(tmp_path: Path) -> None:
         ).stdout
     )
     assert [record["id"] for record in records] == ["metric"]
-    report = json.loads(
-        run_okf(
-            "lifecycle", "report", "--today", "2026-08-06", "--format", "json", cwd=bundle
-        ).stdout
-    )
-    assert report[0]["latest_verification"].startswith("2026-07-02")
-    report_table = run_okf("lifecycle", "report", "--today", "2026-08-06", cwd=bundle).stdout
-    for value in ("ID", "Status", "Stale After", "Last Verified", "metric"):
-        assert value in report_table
+    assert records[0]["stale_after"] == "2026-08-01"
+    assert records[0]["latest_verification"].startswith("2026-07-02")
 
     run_okf("lifecycle", "unset", "metric", "stale_after", cwd=bundle)
     metadata = json.loads(run_okf("meta", "get", "metric", "--format", "json", cwd=bundle).stdout)
