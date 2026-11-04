@@ -415,7 +415,7 @@ def test_tag_list_supports_paths_counts_and_json(tmp_path: Path) -> None:
     assert listed.stdout == "analytics\nglobal\nsales\nshared\n"
 
     scoped = run_okf("tag", "list", "teams", "--format", "json", cwd=bundle)
-    assert json.loads(scoped.stdout) == ["analytics", "sales", "shared"]
+    assert scoped.stdout == '["analytics","sales","shared"]\n'
 
     counted = run_okf("tag", "list", "--counts", "--format", "json", cwd=bundle)
     assert json.loads(counted.stdout) == [

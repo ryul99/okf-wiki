@@ -90,7 +90,11 @@ def _format(args: argparse.Namespace) -> str:
 
 
 def _json(value: Any) -> None:
-    print(json.dumps(yaml_plain(value), indent=2, ensure_ascii=False, sort_keys=False))
+    print(
+        json.dumps(
+            yaml_plain(value), ensure_ascii=False, sort_keys=False, separators=(",", ":")
+        )
+    )
 
 
 def _yaml_text(value: Any) -> str:

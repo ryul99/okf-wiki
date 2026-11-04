@@ -109,7 +109,8 @@ not report the following as errors:
 
 Commands should be usable interactively, but must not require prompts. All
 required values must have flag-based forms, and machine-readable output must be
-available through `--format json`.
+available through `--format json`. JSON output is compact: a single line with
+no indentation or separator whitespace, followed by a newline.
 
 ## 5. Bundle and concept model
 
