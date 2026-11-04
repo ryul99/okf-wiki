@@ -8,6 +8,7 @@ import io
 import json
 import os
 import sys
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -18,7 +19,15 @@ from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
 from okf_cli import __version__
 from okf_cli.errors import OkfError, OperationalError, UsageError
-from okf_cli.inspection import all_links, citation_diagnostics, link_diagnostics, links_for_file
+from okf_cli.inspection import (
+    CheckDiagnostic,
+    all_links,
+    citation_diagnostics,
+    document_citation_diagnostics,
+    document_link_diagnostics,
+    link_diagnostics,
+    links_for_file,
+)
 from okf_cli.metadata import (
     Filters,
     dotted_get,
@@ -38,6 +47,7 @@ from okf_cli.model import (
     concept_path,
     discover_root,
     iter_concepts,
+    parse_bytes,
     parse_document,
     require_mutable_document,
     safe_resolve,
@@ -136,6 +146,16 @@ def _target_path(root: Path, value: str | None) -> Path | None:
     if not candidate.exists():
         raise OperationalError(f"path does not exist: {value}")
     return candidate
+
+
+def _positive_int(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return number
 
 
 def _filters(args: argparse.Namespace) -> Filters:
@@ -288,7 +308,13 @@ def cmd_show(args: argparse.Namespace) -> int:
             sys.stdout.write(_yaml_text(document.frontmatter))
     elif args.body_only:
         if _format(args) == "json":
-            _json({"id": concept_id(root, path), "body": document.text_body})
+            _json(
+                {
+                    "id": concept_id(root, path),
+                    "identity": document.identity,
+                    "body": document.text_body,
+                }
+            )
         else:
             sys.stdout.buffer.write(document.body)
     else:
@@ -296,6 +322,7 @@ def cmd_show(args: argparse.Namespace) -> int:
             _json(
                 {
                     "id": concept_id(root, path),
+                    "identity": document.identity,
                     "frontmatter": document.frontmatter,
                     "body": document.text_body,
                     "source": document.raw.decode("utf-8"),
@@ -313,6 +340,8 @@ def cmd_search(args: argparse.Namespace) -> int:
     needle = args.query if args.case_sensitive else args.query.casefold()
     results: list[dict[str, Any]] = []
     for path in iter_concepts(root):
+        if args.limit is not None and len(results) > args.limit:
+            break
         document = parse_document(path, require_frontmatter=True)
         metadata = document.frontmatter
         if metadata is None or not filters.matches(metadata, today):
@@ -354,6 +383,9 @@ def cmd_search(args: argparse.Namespace) -> int:
                             "line": line_number,
                         }
                     )
+    if args.limit is not None and len(results) > args.limit:
+        results = results[: args.limit]
+        print(f"note: more matches exist beyond --limit {args.limit}", file=sys.stderr)
     if _format(args) == "json":
         _json(results)
     else:
@@ -484,6 +516,80 @@ def cmd_meta_unset(args: argparse.Namespace) -> int:
     )
     if not args.dry_run and _format(args) == "json":
         _json({"path": concept_id(root, document.path), "key": args.key, "changed": changed})
+    return 0
+
+
+def _read_body_input(source: str | None) -> bytes:
+    if source is not None:
+        try:
+            content = Path(source).expanduser().read_bytes()
+        except OSError as exc:
+            raise OperationalError(f"cannot read {source}: {exc}") from exc
+    elif sys.stdin is None or sys.stdin.isatty():
+        raise UsageError("pass --from-file or pipe the body content through stdin")
+    else:
+        content = sys.stdin.buffer.read()
+    try:
+        content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise UsageError("body content must be valid UTF-8") from exc
+    return content
+
+
+def _body_diagnostics(root: Path, document: Document) -> list[CheckDiagnostic]:
+    return [
+        *document_link_diagnostics(root, document),
+        *document_citation_diagnostics(root, document),
+    ]
+
+
+def _new_body_warnings(root: Path, before: Document, after: Document) -> list[CheckDiagnostic]:
+    # Lines shift when a body changes, so a warning is matched by what it says, not where.
+    existing = Counter((item.code, item.message) for item in _body_diagnostics(root, before))
+    added: list[CheckDiagnostic] = []
+    for item in _body_diagnostics(root, after):
+        key = (item.code, item.message)
+        if existing[key]:
+            existing[key] -= 1
+        else:
+            added.append(item)
+    return added
+
+
+def cmd_body_set(args: argparse.Namespace) -> int:
+    root = _prepare_mutation(args)
+    document = require_mutable_document(root, args.concept)
+    if args.if_match is not None and args.if_match != document.identity:
+        raise OperationalError(f"{document.path}: content identity does not match --if-match")
+    body = _read_body_input(args.from_file)
+    proposed = parse_bytes(document.path, document.prefix + body)
+    warnings = _new_body_warnings(root, document, proposed)
+    is_blocked = bool(args.warnings_as_errors and warnings)
+    is_changed = proposed.raw != document.raw and not is_blocked
+    is_written = is_changed and not args.dry_run
+    if args.dry_run and _format(args) != "json":
+        _display_change(document, proposed.raw, True)
+    elif is_written:
+        atomic_write(document.path, proposed.raw, expected_identity=document.identity)
+    if _format(args) == "json":
+        payload: dict[str, Any] = {
+            "path": concept_id(root, document.path),
+            "changed": is_changed,
+            "identity": proposed.identity if is_written else document.identity,
+            "warnings": [item.as_dict() for item in warnings],
+        }
+        if args.dry_run:
+            payload["body"] = body.decode("utf-8")
+        _json(payload)
+    else:
+        for item in warnings:
+            print(
+                f"{item.severity}: {item.file}:{item.line or '-'}: {item.message}",
+                file=sys.stderr,
+            )
+    if is_blocked:
+        print("error: new warnings block the body write (--warnings-as-errors)", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -937,6 +1043,7 @@ def build_parser() -> ArgumentParser:
     search.add_argument("query")
     search.add_argument("--metadata-only", action="store_true")
     search.add_argument("--case-sensitive", action="store_true")
+    search.add_argument("--limit", type=_positive_int)
     _add_filters(search)
     search.set_defaults(handler=cmd_search)
 
@@ -963,6 +1070,17 @@ def build_parser() -> ArgumentParser:
     _common(meta_unset)
     _dry(meta_unset)
     meta_unset.set_defaults(handler=cmd_meta_unset)
+
+    body = _command(commands, "body", "Write a concept's Markdown body.")
+    body_commands = body.add_subparsers(dest="body_action", required=True)
+    body_set = _command(body_commands, "set", "Replace a concept's body from a file or stdin.")
+    body_set.add_argument("concept")
+    body_set.add_argument("--from-file")
+    body_set.add_argument("--if-match")
+    body_set.add_argument("--warnings-as-errors", action="store_true")
+    _common(body_set)
+    _dry(body_set)
+    body_set.set_defaults(handler=cmd_body_set)
 
     tag = _command(commands, "tag", "List, add, or remove concept tags.")
     tag_commands = tag.add_subparsers(dest="tag_action", required=True)

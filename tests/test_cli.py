@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -12,6 +13,7 @@ def run_okf(
     cwd: Path,
     expected: int = 0,
     environment: dict[str, str] | None = None,
+    stdin: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.pop("OKF_ACTOR", None)
@@ -24,6 +26,7 @@ def run_okf(
         check=False,
         capture_output=True,
         text=True,
+        input=stdin,
     )
     assert result.returncode == expected, result.stderr + result.stdout
     return result
@@ -44,6 +47,7 @@ def test_help_describes_each_command(tmp_path: Path) -> None:
         "Show a concept's contents.",
         "Search concept metadata and content.",
         "Read or update concept metadata.",
+        "Write a concept's Markdown body.",
         "List, add, or remove concept tags.",
         "Manage a concept's sources.",
         "Record a concept verification.",
@@ -61,6 +65,7 @@ def test_help_describes_each_command(tmp_path: Path) -> None:
             "Set a metadata value on a concept.",
             "Remove a metadata value from a concept.",
         ),
+        "body": ("Replace a concept's body from a file or stdin.",),
         "tag": (
             "List tags in the bundle.",
             "Add tags to a concept.",
@@ -213,6 +218,141 @@ def test_metadata_mutations_preserve_body_and_unknown_fields(tmp_path: Path) -> 
     ambiguous = run_okf("meta", "set", "notes/example", "enabled", "true", cwd=bundle, expected=2)
     assert "explicit --type" in ambiguous.stderr
     run_okf("meta", "unset", "notes/example", "type", cwd=bundle, expected=2)
+
+
+def frontmatter_bytes(path: Path) -> bytes:
+    raw = path.read_bytes()
+    return raw[: raw.index(b"\n---\n") + len(b"\n---\n")]
+
+
+def body_text(path: Path) -> str:
+    return path.read_bytes()[len(frontmatter_bytes(path)) :].decode("utf-8")
+
+
+def test_body_set_round_trips_show_output_and_keeps_frontmatter_bytes(tmp_path: Path) -> None:
+    bundle = init_bundle(tmp_path)
+    concept = write_concept(
+        bundle,
+        "worklog/okf.md",
+        "type: Worklog\ntitle: 'OKF work'  # quoted on purpose\ntags: [autosave-worklog]",
+        "\n## 2026-11-03\n\n- earlier\n",
+    )
+    original = concept.read_bytes()
+    original_frontmatter = frontmatter_bytes(concept)
+    draft = tmp_path / "draft.md"
+    draft.write_text(
+        run_okf("show", "worklog/okf", "--body-only", cwd=bundle).stdout, encoding="utf-8"
+    )
+
+    unchanged = json.loads(
+        run_okf(
+            "body",
+            "set",
+            "worklog/okf",
+            "--from-file",
+            str(draft),
+            "--format",
+            "json",
+            cwd=bundle,
+        ).stdout
+    )
+    assert unchanged["changed"] is False
+    assert concept.read_bytes() == original
+
+    draft.write_text(
+        draft.read_text(encoding="utf-8") + "- 같은 날 추가한 항목\n", encoding="utf-8"
+    )
+    run_okf("body", "set", "worklog/okf", "--from-file", str(draft), cwd=bundle)
+    assert frontmatter_bytes(concept) == original_frontmatter
+    assert body_text(concept) == "\n## 2026-11-03\n\n- earlier\n- 같은 날 추가한 항목\n"
+
+    run_okf("body", "set", "worklog/okf", cwd=bundle, stdin="# Replaced\n\nOnly this.")
+    assert frontmatter_bytes(concept) == original_frontmatter
+    assert body_text(concept) == "# Replaced\n\nOnly this."
+
+    missing = tmp_path / "missing.md"
+    run_okf("body", "set", "worklog/okf", "--from-file", str(missing), cwd=bundle, expected=3)
+
+
+def test_body_guards_identity_new_warnings_dry_run_and_reserved_files(tmp_path: Path) -> None:
+    bundle = init_bundle(tmp_path)
+    concept = write_concept(bundle, "notes/links.md", "type: Note", "See [missing](missing.md).\n")
+    original = concept.read_bytes()
+    shown = json.loads(run_okf("show", "notes/links", "--format", "json", cwd=bundle).stdout)
+    assert shown["identity"] == hashlib.sha256(original).hexdigest()
+
+    run_okf(
+        "body",
+        "set",
+        "notes/links",
+        "--if-match",
+        "0" * 64,
+        cwd=bundle,
+        stdin="Changed.\n",
+        expected=3,
+    )
+    dry_run = run_okf(
+        "body", "set", "notes/links", "--dry-run", cwd=bundle, stdin="Proposed line.\n"
+    )
+    assert "+Proposed line." in dry_run.stdout
+    blocked = run_okf(
+        "body",
+        "set",
+        "notes/links",
+        "--warnings-as-errors",
+        cwd=bundle,
+        stdin="See [missing](missing.md).\nAlso [gone](gone.md).\n",
+        expected=1,
+    )
+    assert "gone.md" in blocked.stderr
+    assert concept.read_bytes() == original
+
+    run_okf(
+        "body",
+        "set",
+        "notes/links",
+        "--warnings-as-errors",
+        cwd=bundle,
+        stdin="See [missing](missing.md).\nStill fine.\n",
+    )
+    assert body_text(concept) == "See [missing](missing.md).\nStill fine.\n"
+
+    written = json.loads(
+        run_okf(
+            "body",
+            "set",
+            "notes/links",
+            "--if-match",
+            hashlib.sha256(concept.read_bytes()).hexdigest(),
+            "--format",
+            "json",
+            cwd=bundle,
+            stdin="See [missing](missing.md) and [gone](gone.md).\n",
+        ).stdout
+    )
+    assert written["changed"] is True
+    assert written["identity"] == hashlib.sha256(concept.read_bytes()).hexdigest()
+    assert [item["message"] for item in written["warnings"]] == [
+        "internal link target does not exist: gone.md"
+    ]
+
+    run_okf("body", "set", "index", cwd=bundle, stdin="# Concepts\n", expected=2)
+
+
+def test_search_limit_keeps_the_first_matches_and_notes_the_rest(tmp_path: Path) -> None:
+    bundle = init_bundle(tmp_path)
+    for name in ("a", "b", "c"):
+        write_concept(bundle, f"notes/{name}.md", "type: Note", "A needle here.\n")
+
+    limited = run_okf("search", "needle", "--limit", "2", "--format", "json", cwd=bundle)
+    assert [result["id"] for result in json.loads(limited.stdout)] == ["notes/a", "notes/b"]
+    assert "--limit 2" in limited.stderr
+
+    complete = run_okf("search", "needle", "--limit", "3", "--format", "json", cwd=bundle)
+    assert len(json.loads(complete.stdout)) == 3
+    assert complete.stderr == ""
+
+    run_okf("search", "needle", "--limit", "0", cwd=bundle, expected=2)
 
 
 def test_tag_list_supports_paths_counts_and_json(tmp_path: Path) -> None:

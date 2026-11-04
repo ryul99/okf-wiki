@@ -2,9 +2,9 @@
 
 `okf` manages file-based [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) v0.2 bundles while
 keeping Markdown files authoritative. It creates and inspects concepts, safely
-updates YAML frontmatter, validates bundles, searches content, checks links and
-citations, reports trust and lifecycle state, and performs recoverable concept
-moves.
+updates YAML frontmatter, writes concept bodies, validates bundles, searches
+content, checks links and citations, reports trust and lifecycle state, and
+performs recoverable concept moves.
 
 ## Installation
 
@@ -118,6 +118,24 @@ uv run okf tag list --counts
 uv run okf tag list --format json
 ```
 
+## Write concept bodies
+
+Replace a concept's Markdown body from a file or stdin. The frontmatter bytes
+are kept exactly as they are:
+
+```sh
+uv run okf show notes/handoff --body-only > handoff.md
+# Edit handoff.md, then write it back.
+uv run okf body set notes/handoff --from-file handoff.md
+
+printf '# Handoff\n\nNext: add tests.\n' | uv run okf body set notes/handoff
+```
+
+Pass `--if-match` with the `identity` reported by `okf show --format json` to
+refuse a write when the file changed since it was read, and
+`--warnings-as-errors` to refuse a write that introduces new link or citation
+warnings.
+
 ## Interrupted move recovery
 
 Move transactions use hidden `.okf-transaction-*` directories inside the
@@ -127,5 +145,5 @@ the newly created destination, and cleans up the transaction directory. If its
 recovery manifest is damaged, mutation is refused and the transaction directory
 is retained for manual recovery.
 
-The CLI never initializes Git, stores knowledge in a database, launches an
-editor, or rewrites authored prose.
+The CLI never initializes Git, stores knowledge in a database, or launches an
+editor.

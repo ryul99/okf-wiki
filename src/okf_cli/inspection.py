@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from okf_cli.markdown import footnotes, resolve_destination, scan_links
-from okf_cli.model import concept_id, iter_markdown, parse_document
+from okf_cli.model import RESERVED_NAMES, Document, concept_id, iter_markdown, parse_document
 
 
 @dataclass(frozen=True)
@@ -39,13 +39,17 @@ class CheckDiagnostic:
 
 
 def links_for_file(root: Path, path: Path) -> list[LinkRecord]:
-    document = parse_document(path)
+    return links_for_document(root, parse_document(path))
+
+
+def links_for_document(root: Path, document: Document) -> list[LinkRecord]:
+    path = document.path
     text = document.text_body
     body_line_offset = document.prefix.count(b"\n")
     records: list[LinkRecord] = []
     source_name = (
         concept_id(root, path)
-        if path.name not in {"index.md", "log.md"}
+        if path.name not in RESERVED_NAMES
         else path.relative_to(root).as_posix()
     )
     for link in scan_links(text):
@@ -76,98 +80,114 @@ def all_links(root: Path, path: Path | None = None) -> list[LinkRecord]:
     ]
 
 
+def _link_diagnostic(record: LinkRecord) -> CheckDiagnostic | None:
+    if record.outside_bundle:
+        return CheckDiagnostic(
+            "warning",
+            "link-outside-bundle",
+            record.source,
+            record.line,
+            f"internal link escapes the bundle: {record.destination}",
+        )
+    if record.broken:
+        return CheckDiagnostic(
+            "warning",
+            "broken-link",
+            record.source,
+            record.line,
+            f"internal link target does not exist: {record.destination}",
+        )
+    return None
+
+
 def link_diagnostics(root: Path, path: Path | None = None) -> list[CheckDiagnostic]:
-    diagnostics: list[CheckDiagnostic] = []
-    for record in all_links(root, path):
-        if record.outside_bundle:
-            diagnostics.append(
-                CheckDiagnostic(
-                    "warning",
-                    "link-outside-bundle",
-                    record.source,
-                    record.line,
-                    f"internal link escapes the bundle: {record.destination}",
-                )
-            )
-        elif record.broken:
-            diagnostics.append(
-                CheckDiagnostic(
-                    "warning",
-                    "broken-link",
-                    record.source,
-                    record.line,
-                    f"internal link target does not exist: {record.destination}",
-                )
-            )
-    return diagnostics
+    return [
+        diagnostic
+        for record in all_links(root, path)
+        if (diagnostic := _link_diagnostic(record)) is not None
+    ]
+
+
+def document_link_diagnostics(root: Path, document: Document) -> list[CheckDiagnostic]:
+    return [
+        diagnostic
+        for record in links_for_document(root, document)
+        if (diagnostic := _link_diagnostic(record)) is not None
+    ]
 
 
 def citation_diagnostics(root: Path, path: Path | None = None) -> list[CheckDiagnostic]:
     diagnostics: list[CheckDiagnostic] = []
     for source in iter_markdown(root, path):
-        if source.name in {"index.md", "log.md"}:
+        if source.name in RESERVED_NAMES:
             continue
         document = parse_document(source, require_frontmatter=True)
-        if document.frontmatter is None:
-            continue
-        file_name = concept_id(root, source)
-        source_entries = document.frontmatter.get("sources", [])
-        ids: list[str] = []
-        if isinstance(source_entries, list):
-            for entry in source_entries:
-                if isinstance(entry, Mapping) and isinstance(entry.get("id"), str):
-                    ids.append(entry["id"])
-        uses, definitions = footnotes(document.text_body)
-        body_line_offset = document.prefix.count(b"\n")
-        uses = [(label, line + body_line_offset) for label, line in uses]
-        definitions = [(label, line + body_line_offset) for label, line in definitions]
-        id_counts = Counter(ids)
-        definition_counts = Counter(label for label, _ in definitions)
-        used_labels = {label for label, _ in uses}
-        defined_labels = {label for label, _ in definitions}
-        known_ids = set(ids)
-        for source_id, count in id_counts.items():
-            if count > 1:
-                diagnostics.append(
-                    CheckDiagnostic(
-                        "warning",
-                        "duplicate-source-id",
-                        file_name,
-                        None,
-                        f"duplicate source ID: {source_id}",
-                    )
-                )
-        for label, count in definition_counts.items():
-            if count > 1:
-                line = next(line for item, line in definitions if item == label)
-                diagnostics.append(
-                    CheckDiagnostic(
-                        "warning",
-                        "duplicate-footnote-definition",
-                        file_name,
-                        line,
-                        f"duplicate footnote definition: {label}",
-                    )
-                )
-        for label, line in sorted((*uses, *definitions), key=lambda item: item[1]):
-            if label not in known_ids:
-                diagnostics.append(
-                    CheckDiagnostic(
-                        "warning",
-                        "unmatched-footnote",
-                        file_name,
-                        line,
-                        f"footnote has no matching source ID: {label}",
-                    )
-                )
-        for source_id in sorted(known_ids - (used_labels | defined_labels)):
+        diagnostics.extend(document_citation_diagnostics(root, document))
+    return diagnostics
+
+
+def document_citation_diagnostics(root: Path, document: Document) -> list[CheckDiagnostic]:
+    if document.frontmatter is None:
+        return []
+    diagnostics: list[CheckDiagnostic] = []
+    file_name = concept_id(root, document.path)
+    source_entries = document.frontmatter.get("sources", [])
+    ids: list[str] = []
+    if isinstance(source_entries, list):
+        for entry in source_entries:
+            if isinstance(entry, Mapping) and isinstance(entry.get("id"), str):
+                ids.append(entry["id"])
+    uses, definitions = footnotes(document.text_body)
+    body_line_offset = document.prefix.count(b"\n")
+    uses = [(label, line + body_line_offset) for label, line in uses]
+    definitions = [(label, line + body_line_offset) for label, line in definitions]
+    id_counts = Counter(ids)
+    definition_counts = Counter(label for label, _ in definitions)
+    used_labels = {label for label, _ in uses}
+    defined_labels = {label for label, _ in definitions}
+    known_ids = set(ids)
+    for source_id, count in id_counts.items():
+        if count > 1:
             diagnostics.append(
                 CheckDiagnostic(
                     "warning",
-                    "unused-source",
+                    "duplicate-source-id",
                     file_name,
                     None,
-                    f"source ID is not referenced by a body footnote: {source_id}",
+                    f"duplicate source ID: {source_id}",
                 )
             )
+    for label, count in definition_counts.items():
+        if count > 1:
+            line = next(line for item, line in definitions if item == label)
+            diagnostics.append(
+                CheckDiagnostic(
+                    "warning",
+                    "duplicate-footnote-definition",
+                    file_name,
+                    line,
+                    f"duplicate footnote definition: {label}",
+                )
+            )
+    for label, line in sorted((*uses, *definitions), key=lambda item: item[1]):
+        if label not in known_ids:
+            diagnostics.append(
+                CheckDiagnostic(
+                    "warning",
+                    "unmatched-footnote",
+                    file_name,
+                    line,
+                    f"footnote has no matching source ID: {label}",
+                )
+            )
+    for source_id in sorted(known_ids - (used_labels | defined_labels)):
+        diagnostics.append(
+            CheckDiagnostic(
+                "warning",
+                "unused-source",
+                file_name,
+                None,
+                f"source ID is not referenced by a body footnote: {source_id}",
+            )
+        )
     return diagnostics

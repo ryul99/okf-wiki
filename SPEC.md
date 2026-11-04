@@ -6,10 +6,11 @@ The OKF Wiki CLI is a small command-line tool for managing an Open Knowledge
 Format (OKF) bundle as a file-based wiki.
 
 Markdown files are the source of truth. People and agents edit Markdown bodies
-directly with their normal filesystem tools. The CLI is responsible for bundle
-discovery, YAML frontmatter operations, validation, search, link inspection,
-safe concept moves, and lifecycle reporting. It must not introduce a database,
-server, editor, or proprietary storage format.
+with their normal filesystem tools or write them through the CLI. The CLI is
+responsible for bundle discovery, YAML frontmatter operations, body writes,
+validation, search, link inspection, safe concept moves, and lifecycle
+reporting. It must not introduce a database, server, editor, or proprietary
+storage format.
 
 The examples in this specification use `okf` as the executable name.
 
@@ -18,7 +19,8 @@ The examples in this specification use `okf` as the executable name.
 The CLI should:
 
 1. Make it easy to create a conformant OKF bundle and concept documents.
-2. Let people and agents inspect and update YAML frontmatter safely.
+2. Let people and agents inspect and update YAML frontmatter and Markdown
+   bodies safely.
 3. Validate OKF v0.2 structure and metadata without rejecting permitted
    extensions.
 4. Provide fast file, metadata, full-text, and link discovery.
@@ -35,10 +37,7 @@ The CLI will not:
 
 - Provide a web UI, local server, TUI, or built-in editor.
 - Open an external editor.
-- Author, generate, or reformat Markdown prose or document structure.
 - Generate or update the authored content of `index.md` or `log.md`.
-- Perform general-purpose Markdown transformations. The only body mutation is
-  the targeted link-destination rewrite performed by `okf move`.
 - Move directories or arbitrary non-concept files.
 - Wrap Git operations such as diff, history, commit, push, or pull.
 - Store bundle content in a database or maintain a required persistent index.
@@ -59,21 +58,7 @@ The CLI reads the bundle from disk on each invocation. Any cache must be
 optional, disposable, and reproducible from the files. Deleting a cache must
 never lose knowledge.
 
-### 4.2 Markdown bodies belong to authors
-
-Commands may read Markdown bodies for display, search, citations, and link
-analysis. They must not author or reformat the body of an existing file.
-
-`okf move` is the single exception: it may rewrite parsed internal link
-destinations to preserve their targets after an explicitly requested concept
-move. It must preserve link labels, surrounding prose, whitespace, and all
-other body bytes.
-
-Concept creation may create a new file containing frontmatter followed by an
-empty Markdown body. After creation, body content is maintained directly by a
-person or agent.
-
-### 4.3 Structural refactoring is explicit and mechanical
+### 4.2 Structural refactoring is explicit and mechanical
 
 A concept move is a structural refactoring, not a content-authoring operation.
 It must be requested explicitly through `okf move`, limited to one concept per
@@ -90,7 +75,7 @@ The move may update only:
 It must not infer, rewrite, or improve prose, headings, link labels, code
 examples, or arbitrary path-like text.
 
-### 4.4 Frontmatter changes are narrow and lossless
+### 4.3 Frontmatter changes are narrow and lossless
 
 A frontmatter mutation must:
 
@@ -109,7 +94,7 @@ For `okf move`, path-valued fields affected by the move are related values and
 may change. All other frontmatter values remain subject to the preservation
 rules above.
 
-### 4.5 Validation follows OKF's tolerance rules
+### 4.4 Validation follows OKF's tolerance rules
 
 The validator distinguishes conformance errors from advisory warnings. It must
 not report the following as errors:
@@ -120,7 +105,7 @@ not report the following as errors:
 - Broken internal links.
 - Missing `index.md` files.
 
-### 4.6 Human and agent parity
+### 4.5 Human and agent parity
 
 Commands should be usable interactively, but must not require prompts. All
 required values must have flag-based forms, and machine-readable output must be
@@ -262,6 +247,9 @@ Default output is the complete source file. `--frontmatter-only` supports
 `text`, `yaml`, and `json` output. `--body-only` prints the body exactly as
 stored. The two selection flags are mutually exclusive.
 
+JSON output for the complete file and for `--body-only` includes `identity`,
+the SHA-256 of the file's bytes, for use with `okf body --if-match`.
+
 ### 6.5 `okf search`
 
 Search concept IDs, metadata, and Markdown bodies.
@@ -280,12 +268,17 @@ The command supports the same metadata filters as `okf list`, plus:
 
 - `--metadata-only` to exclude body text
 - `--case-sensitive`
+- `--limit <n>` to return at most `n` results
 
 Queries are treated as literal text. Regular-expression syntax is out of scope
 for the core CLI.
 
 Results include the concept ID and a short matching excerpt. JSON results must
 identify the matched field and, for body matches, the line number.
+
+Results follow concept ID order. With `--limit`, the command returns the first
+`n` results in that order and, when more matches exist, writes a note to
+standard error. JSON output remains an array of results.
 
 ### 6.6 `okf meta`
 
@@ -309,7 +302,41 @@ Requirements:
 Higher-level commands below are preferred for metadata families with semantic
 rules.
 
-### 6.7 `okf tag`
+### 6.7 `okf body`
+
+Replace a concept's Markdown body.
+
+```bash
+okf body set <concept-id> [--from-file <path>] [--if-match <sha256>] [--warnings-as-errors]
+```
+
+The new body is read from the file named by `--from-file`, or otherwise from
+standard input, and must be valid UTF-8. Without `--from-file`, the command
+refuses to run when standard input is a terminal, so it never waits for
+interactive input. The body is written exactly as supplied.
+
+`okf show --body-only` prints a body in the same form, so a person or agent can
+save it to a file, edit the file, and write it back with `--from-file`. Writing
+back an unedited copy leaves the concept unchanged.
+
+Requirements:
+
+- Preserve the frontmatter bytes exactly; the frontmatter is not re-serialized.
+- Reject reserved files and concepts whose frontmatter cannot be parsed.
+- With `--if-match`, refuse the write unless the SHA-256 of the current file
+  equals the supplied value.
+- Before writing, run link and citation checks on the proposed body and report
+  the warnings the current body does not already have. Warnings are matched by
+  code and message because line numbers shift. With `--warnings-as-errors`,
+  new warnings leave the file unchanged and the command exits with code `1`.
+- Write atomically with concurrent-change detection.
+
+`--dry-run` prints a unified diff. With `--format json`, the command returns
+`path`, `changed` (whether the file was or would be changed),
+`identity` (the SHA-256 of the file after the command), and `warnings`; a dry
+run also returns the proposed `body`.
+
+### 6.8 `okf tag`
 
 Manage the frontmatter `tags` list.
 
@@ -329,7 +356,7 @@ text, or an empty JSON array.
 Tags are deduplicated while preserving their existing order. Removing a tag
 that is not present is a successful no-op.
 
-### 6.8 `okf source`
+### 6.9 `okf source`
 
 Manage provenance entries without editing body citations.
 
@@ -351,7 +378,7 @@ Optional fields for `source add`:
 The command validates field shapes and rejects duplicate source IDs within a
 concept. It does not add, remove, or rewrite footnotes in the Markdown body.
 
-### 6.9 `okf verify`
+### 6.10 `okf verify`
 
 Append a verification event to frontmatter.
 
@@ -363,7 +390,7 @@ okf verify <concept-id> --by <actor> [--at <ISO-8601-datetime>]
 `verified` mapping to a list when appending a second event. It must not delete
 earlier events.
 
-### 6.10 `okf lifecycle`
+### 6.11 `okf lifecycle`
 
 Update or report lifecycle metadata.
 
@@ -377,7 +404,7 @@ okf lifecycle report [--stale] [--due-before YYYY-MM-DD]
 The report is read-only and includes concept ID, status, stale date, and the
 latest verification date when present.
 
-### 6.11 `okf links`
+### 6.12 `okf links`
 
 Inspect Markdown links without changing them.
 
@@ -396,7 +423,7 @@ Requirements:
 - Treat broken links as warnings, consistent with OKF conformance rules.
 - Never rewrite a link or file.
 
-### 6.12 `okf move`
+### 6.13 `okf move`
 
 Move one concept and mechanically preserve internal references.
 
@@ -471,7 +498,7 @@ unchanged.
 The move does not update `generated`, `verified`, `status`, or `stale_after`:
 relocation is not a meaningful content change or a new verification event.
 
-### 6.13 `okf citations check`
+### 6.14 `okf citations check`
 
 Check the relationship between body footnotes and `sources[].id` values.
 
@@ -489,7 +516,7 @@ Warnings include:
 An unused source is advisory because a source may support the concept as a
 whole rather than a single claim.
 
-### 6.14 `okf validate`
+### 6.15 `okf validate`
 
 Validate a bundle, directory, or concept.
 
@@ -571,11 +598,11 @@ command or automatic recovery behavior.
 
 - No command may read or write through a resolved path outside the bundle root
   unless the user supplied that external path explicitly to a read-only
-  command.
+  command or as the input file of `okf body set --from-file`.
 - Symbolic links that escape the bundle are not traversed during bundle scans.
-- Metadata mutation commands reject reserved files. The only reserved-file
-  writes are root `index.md` creation by `okf init` and targeted link
-  destination rewrites by `okf move`.
+- Metadata and body mutation commands reject reserved files. The only
+  reserved-file writes are root `index.md` creation by `okf init` and targeted
+  link destination rewrites by `okf move`.
 - Destructive metadata operations require an explicit command; there is no
   wildcard mutation mode.
 
@@ -606,8 +633,8 @@ The initial implementation may scan files on every command. It should:
 
 - Stream file discovery rather than loading the entire bundle into memory.
 - Parse frontmatter only for metadata listings and filters.
-- Read bodies only for full-text search, link analysis, citation checks, and
-  full validation.
+- Read bodies only for full-text search, link analysis, citation checks, full
+  validation, and body writes.
 - Produce deterministic ordering by normalized concept ID.
 
 An optional cache may be introduced only after measurement shows it is needed.
@@ -628,16 +655,18 @@ Implement the shared foundation first:
 This phase establishes the file model and makes real bundles inspectable before
 introducing mutations.
 
-### Phase 2: Concept creation and safe frontmatter mutation
+### Phase 2: Concept creation and safe frontmatter and body mutation
 
 1. Atomic writes and concurrent-change detection.
 2. `okf new`.
 3. `okf meta get`, `set`, and `unset`.
 4. `okf tag add` and `remove`.
-5. `--dry-run` for every mutating command.
+5. `okf body set`.
+6. `--dry-run` for every mutating command.
 
 Tests in this phase must prove that frontmatter mutations leave the Markdown
-body byte-for-byte unchanged and preserve unknown fields.
+body byte-for-byte unchanged and preserve unknown fields, and that body writes
+leave the frontmatter byte-for-byte unchanged.
 
 ### Phase 3: OKF conformance validation
 
@@ -711,5 +740,5 @@ okf move
 
 This set is sufficient to create a bundle, maintain frontmatter, find
 knowledge, inspect relationships, safely reorganize concepts, and verify the
-result while leaving Markdown authorship to people and agents working directly
-with files.
+result. Bodies can be edited with ordinary filesystem tools before `okf body`
+is available.
