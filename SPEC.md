@@ -403,11 +403,17 @@ earlier events.
 Update or report lifecycle metadata.
 
 ```bash
-okf lifecycle set-status <concept-id> draft|stable|deprecated
-okf lifecycle set-stale-after <concept-id> YYYY-MM-DD
-okf lifecycle clear-stale-after <concept-id>
+okf lifecycle set <concept-id> status draft|stable|deprecated
+okf lifecycle set <concept-id> stale_after YYYY-MM-DD
+okf lifecycle unset <concept-id> status|stale_after
 okf lifecycle report [--stale] [--due-before YYYY-MM-DD]
 ```
+
+`set` and `unset` accept only the lifecycle keys `status` and `stale_after`,
+named as they appear in frontmatter. `set` rejects a status outside
+`draft`, `stable`, and `deprecated` and a stale date that is not
+`YYYY-MM-DD`. `unset` removes the key; a concept without `status` is treated
+as `stable`.
 
 The report is read-only and includes concept ID, status, stale date, and the
 latest verification date when present.

@@ -29,6 +29,8 @@ from okf_cli.inspection import (
     links_for_file,
 )
 from okf_cli.metadata import (
+    LIFECYCLE_KEYS,
+    STATUSES,
     Filters,
     dotted_get,
     dotted_set,
@@ -799,14 +801,16 @@ def cmd_lifecycle_mutate(args: argparse.Namespace) -> int:
     root = _prepare_mutation(args)
     document = require_mutable_document(root, args.concept)
     assert document.frontmatter is not None
-    if args.lifecycle_action == "set-status":
+    if args.lifecycle_action == "unset":
+        document.frontmatter.pop(args.key, None)
+    elif args.key == "status":
+        if args.value not in STATUSES:
+            raise UsageError(f"status must be one of: {', '.join(sorted(STATUSES))}")
         document.frontmatter["status"] = args.value
-    elif args.lifecycle_action == "set-stale-after":
-        if parse_date(args.value) is None:
-            raise UsageError("stale date must use YYYY-MM-DD")
-        document.frontmatter["stale_after"] = args.value
     else:
-        document.frontmatter.pop("stale_after", None)
+        if parse_date(args.value) is None:
+            raise UsageError("stale_after must use YYYY-MM-DD")
+        document.frontmatter["stale_after"] = args.value
     proposed = document.render()
     _display_change(
         document,
@@ -1138,25 +1142,23 @@ def build_parser() -> ArgumentParser:
 
     lifecycle = _command(commands, "lifecycle", "Manage concept lifecycle state.")
     lifecycle_commands = lifecycle.add_subparsers(dest="lifecycle_action", required=True)
-    set_status = _command(lifecycle_commands, "set-status", "Set a concept's lifecycle status.")
-    set_status.add_argument("concept")
-    set_status.add_argument("value", choices=("draft", "stable", "deprecated"))
-    _common(set_status)
-    _dry(set_status)
-    set_status.set_defaults(handler=cmd_lifecycle_mutate)
-    set_stale = _command(lifecycle_commands, "set-stale-after", "Set when a concept becomes stale.")
-    set_stale.add_argument("concept")
-    set_stale.add_argument("value")
-    _common(set_stale)
-    _dry(set_stale)
-    set_stale.set_defaults(handler=cmd_lifecycle_mutate)
-    clear_stale = _command(
-        lifecycle_commands, "clear-stale-after", "Clear when a concept becomes stale."
+    lifecycle_set = _command(
+        lifecycle_commands, "set", "Set a concept's lifecycle status or stale date."
     )
-    clear_stale.add_argument("concept")
-    _common(clear_stale)
-    _dry(clear_stale)
-    clear_stale.set_defaults(handler=cmd_lifecycle_mutate)
+    lifecycle_set.add_argument("concept")
+    lifecycle_set.add_argument("key", choices=LIFECYCLE_KEYS)
+    lifecycle_set.add_argument("value")
+    _common(lifecycle_set)
+    _dry(lifecycle_set)
+    lifecycle_set.set_defaults(handler=cmd_lifecycle_mutate)
+    lifecycle_unset = _command(
+        lifecycle_commands, "unset", "Remove a concept's lifecycle status or stale date."
+    )
+    lifecycle_unset.add_argument("concept")
+    lifecycle_unset.add_argument("key", choices=LIFECYCLE_KEYS)
+    _common(lifecycle_unset)
+    _dry(lifecycle_unset)
+    lifecycle_unset.set_defaults(handler=cmd_lifecycle_mutate)
     report = _command(lifecycle_commands, "report", "Report concept lifecycle state.")
     report.add_argument("--stale", action="store_true")
     report.add_argument("--due-before")

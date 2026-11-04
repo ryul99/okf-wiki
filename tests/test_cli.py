@@ -80,9 +80,8 @@ def test_help_describes_each_command(tmp_path: Path) -> None:
             "Remove a source from a concept.",
         ),
         "lifecycle": (
-            "Set a concept's lifecycle status.",
-            "Set when a concept becomes stale.",
-            "Clear when a concept becomes stale.",
+            "Set a concept's lifecycle status or stale date.",
+            "Remove a concept's lifecycle status or stale date.",
             "Report concept lifecycle state.",
         ),
         "links": (
@@ -445,8 +444,11 @@ def test_provenance_verification_lifecycle_and_filters(tmp_path: Path) -> None:
         "2026-07-02T00:00:00Z",
         cwd=bundle,
     )
-    run_okf("lifecycle", "set-status", "metric", "stable", cwd=bundle)
-    run_okf("lifecycle", "set-stale-after", "metric", "2026-08-01", cwd=bundle)
+    run_okf("lifecycle", "set", "metric", "status", "stable", cwd=bundle)
+    run_okf("lifecycle", "set", "metric", "stale_after", "2026-08-01", cwd=bundle)
+    run_okf("lifecycle", "set", "metric", "status", "archived", cwd=bundle, expected=2)
+    run_okf("lifecycle", "set", "metric", "stale_after", "next week", cwd=bundle, expected=2)
+    run_okf("lifecycle", "set", "metric", "owner", "data", cwd=bundle, expected=2)
 
     records = json.loads(
         run_okf(
@@ -471,6 +473,11 @@ def test_provenance_verification_lifecycle_and_filters(tmp_path: Path) -> None:
     report_table = run_okf("lifecycle", "report", "--today", "2026-08-06", cwd=bundle).stdout
     for value in ("ID", "Status", "Stale After", "Last Verified", "metric"):
         assert value in report_table
+
+    run_okf("lifecycle", "unset", "metric", "stale_after", cwd=bundle)
+    metadata = json.loads(run_okf("meta", "get", "metric", "--format", "json", cwd=bundle).stdout)
+    assert "stale_after" not in metadata
+    assert metadata["status"] == "stable"
     sources = json.loads(run_okf("source", "list", "metric", "--format", "json", cwd=bundle).stdout)
     assert sources[0]["usage_window"] == {"from": "2026-01-01", "to": "2026-06-30"}
 

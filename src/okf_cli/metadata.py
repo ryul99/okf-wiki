@@ -12,6 +12,7 @@ from ruamel.yaml.comments import CommentedMap
 from okf_cli.errors import UsageError
 
 STATUSES = {"draft", "stable", "deprecated"}
+LIFECYCLE_KEYS = ("status", "stale_after")
 TRUST_TIERS = {"unverified", "machine-confirmed", "human-reviewed"}
 
 
