@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from ruamel.yaml.comments import CommentedMap
 
@@ -62,8 +64,7 @@ def is_stale(metadata: Mapping[str, Any], today: date) -> bool:
 
 
 def latest_verification(metadata: Mapping[str, Any]) -> datetime | None:
-    verified = metadata.get("verified")
-    events = verified if isinstance(verified, list) else [verified] if verified is not None else []
+    events = normalize_verified(metadata.get("verified"))
     dates = [
         parsed
         for event in events
@@ -101,6 +102,50 @@ class Filters:
         return not (
             self.due_before is not None and (stale_after is None or stale_after > self.due_before)
         )
+
+
+@dataclass(frozen=True)
+class PathField:
+    """A path-valued frontmatter field, addressable for both reading and rewriting."""
+
+    name: str
+    parent: MutableMapping[str, Any]
+    key: str
+
+    @property
+    def value(self) -> str:
+        return str(self.parent[self.key])
+
+
+def _is_path_like(value: str) -> bool:
+    if urlsplit(value).scheme or value.startswith("//"):
+        return False
+    return (
+        value.startswith(("/", "./", "../"))
+        or "/" in value
+        or bool(re.search(r"\.[A-Za-z0-9]{1,8}(?:[?#].*)?$", value))
+    ) and not any(character.isspace() for character in value)
+
+
+def path_fields(metadata: MutableMapping[str, Any]) -> list[PathField]:
+    candidates = [PathField("resource", metadata, "resource")]
+    sources = metadata.get("sources")
+    if isinstance(sources, list):
+        candidates.extend(
+            PathField(f"sources[{index}].resource", source, "resource")
+            for index, source in enumerate(sources)
+            if isinstance(source, MutableMapping)
+        )
+    candidates.append(PathField("computation", metadata, "computation"))
+    for family in ("executor", "attester"):
+        value = metadata.get(family)
+        if isinstance(value, MutableMapping):
+            candidates.append(PathField(f"{family}.resource", value, "resource"))
+    return [
+        field
+        for field in candidates
+        if isinstance(field.parent.get(field.key), str) and _is_path_like(field.value)
+    ]
 
 
 def dotted_get(metadata: Mapping[str, Any], key: str) -> Any:

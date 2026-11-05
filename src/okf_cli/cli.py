@@ -18,9 +18,9 @@ from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
 from okf_cli import __version__
+from okf_cli.diagnostics import Diagnostic
 from okf_cli.errors import OkfError, OperationalError, UsageError
 from okf_cli.inspection import (
-    CheckDiagnostic,
     all_links,
     citation_diagnostics,
     document_citation_diagnostics,
@@ -509,17 +509,17 @@ def _read_body_input(source: str | None) -> bytes:
     return content
 
 
-def _body_diagnostics(root: Path, document: Document) -> list[CheckDiagnostic]:
+def _body_diagnostics(root: Path, document: Document) -> list[Diagnostic]:
     return [
         *document_link_diagnostics(root, document),
         *document_citation_diagnostics(root, document),
     ]
 
 
-def _new_body_warnings(root: Path, before: Document, after: Document) -> list[CheckDiagnostic]:
+def _new_body_warnings(root: Path, before: Document, after: Document) -> list[Diagnostic]:
     # Lines shift when a body changes, so a warning is matched by what it says, not where.
     existing = Counter((item.code, item.message) for item in _body_diagnostics(root, before))
-    added: list[CheckDiagnostic] = []
+    added: list[Diagnostic] = []
     for item in _body_diagnostics(root, after):
         key = (item.code, item.message)
         if existing[key]:
@@ -556,10 +556,7 @@ def cmd_body_set(args: argparse.Namespace) -> int:
         _json(payload)
     else:
         for item in warnings:
-            print(
-                f"{item.severity}: {item.file}:{item.line or '-'}: {item.message}",
-                file=sys.stderr,
-            )
+            print(item.as_text(), file=sys.stderr)
     if is_blocked:
         print("error: new warnings block the body write (--warnings-as-errors)", file=sys.stderr)
         return 1
@@ -763,7 +760,7 @@ def cmd_links(args: argparse.Namespace) -> int:
             _json({"diagnostics": [item.as_dict() for item in diagnostics]})
         else:
             for item in diagnostics:
-                print(f"{item.severity}: {item.file}:{item.line or '-'}: {item.message}")
+                print(item.as_text())
         return 1 if args.warnings_as_errors and diagnostics else 0
     if _format(args) == "json":
         _json([record.as_dict() for record in records])
@@ -793,7 +790,7 @@ def cmd_citations(args: argparse.Namespace) -> int:
         _json({"diagnostics": [item.as_dict() for item in diagnostics]})
     else:
         for item in diagnostics:
-            print(f"{item.severity}: {item.file}:{item.line or '-'}: {item.message}")
+            print(item.as_text())
     return 1 if args.warnings_as_errors and diagnostics else 0
 
 
@@ -813,9 +810,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
         )
     else:
         for item in diagnostics:
-            location = f":{item.line}" if item.line else ""
-            field = f" [{item.field}]" if item.field else ""
-            print(f"{item.severity}: {item.file}{location}{field}: {item.message}")
+            print(item.as_text())
         print(f"{len(errors)} error(s), {len(warnings)} warning(s)")
     return 1 if errors or (args.warnings_as_errors and warnings) else 0
 

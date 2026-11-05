@@ -21,6 +21,19 @@ RESERVED_NAMES = {"index.md", "log.md"}
 TRANSACTION_PREFIX = ".okf-transaction-"
 
 
+def content_identity(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def ensure_unchanged(path: Path, expected_identity: str) -> None:
+    try:
+        current = content_identity(path.read_bytes())
+    except OSError as exc:
+        raise OperationalError(f"cannot recheck {path}: {exc}") from exc
+    if current != expected_identity:
+        raise OperationalError(f"concurrent change detected: {path}")
+
+
 def _yaml() -> YAML:
     parser = YAML(typ="rt")
     parser.preserve_quotes = True
@@ -39,7 +52,7 @@ class Document:
 
     @property
     def identity(self) -> str:
-        return hashlib.sha256(self.raw).hexdigest()
+        return content_identity(self.raw)
 
     @property
     def text_body(self) -> str:
@@ -182,12 +195,7 @@ def iter_concepts(root: Path, path: Path | None = None) -> Iterator[Path]:
 def atomic_write(path: Path, data: bytes, *, expected_identity: str | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if expected_identity is not None:
-        try:
-            current = hashlib.sha256(path.read_bytes()).hexdigest()
-        except OSError as exc:
-            raise OperationalError(f"cannot recheck {path}: {exc}") from exc
-        if current != expected_identity:
-            raise OperationalError(f"concurrent change detected: {path}")
+        ensure_unchanged(path, expected_identity)
     file_descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary_path = Path(temporary)
     try:

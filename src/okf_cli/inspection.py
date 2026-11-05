@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from okf_cli.diagnostics import Diagnostic
 from okf_cli.markdown import footnotes, resolve_destination, scan_links
 from okf_cli.model import RESERVED_NAMES, Document, concept_id, iter_markdown, parse_document
 
@@ -21,18 +22,6 @@ class LinkRecord:
     external: bool
     broken: bool
     outside_bundle: bool
-
-    def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass(frozen=True)
-class CheckDiagnostic:
-    severity: str
-    code: str
-    file: str
-    line: int | None
-    message: str
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -80,27 +69,27 @@ def all_links(root: Path, path: Path | None = None) -> list[LinkRecord]:
     ]
 
 
-def _link_diagnostic(record: LinkRecord) -> CheckDiagnostic | None:
+def _link_diagnostic(record: LinkRecord) -> Diagnostic | None:
     if record.outside_bundle:
-        return CheckDiagnostic(
+        return Diagnostic(
             "warning",
             "link-outside-bundle",
             record.source,
-            record.line,
             f"internal link escapes the bundle: {record.destination}",
+            line=record.line,
         )
     if record.broken:
-        return CheckDiagnostic(
+        return Diagnostic(
             "warning",
             "broken-link",
             record.source,
-            record.line,
             f"internal link target does not exist: {record.destination}",
+            line=record.line,
         )
     return None
 
 
-def link_diagnostics(root: Path, path: Path | None = None) -> list[CheckDiagnostic]:
+def link_diagnostics(root: Path, path: Path | None = None) -> list[Diagnostic]:
     return [
         diagnostic
         for record in all_links(root, path)
@@ -108,7 +97,7 @@ def link_diagnostics(root: Path, path: Path | None = None) -> list[CheckDiagnost
     ]
 
 
-def document_link_diagnostics(root: Path, document: Document) -> list[CheckDiagnostic]:
+def document_link_diagnostics(root: Path, document: Document) -> list[Diagnostic]:
     return [
         diagnostic
         for record in links_for_document(root, document)
@@ -116,8 +105,8 @@ def document_link_diagnostics(root: Path, document: Document) -> list[CheckDiagn
     ]
 
 
-def citation_diagnostics(root: Path, path: Path | None = None) -> list[CheckDiagnostic]:
-    diagnostics: list[CheckDiagnostic] = []
+def citation_diagnostics(root: Path, path: Path | None = None) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
     for source in iter_markdown(root, path):
         if source.name in RESERVED_NAMES:
             continue
@@ -126,10 +115,10 @@ def citation_diagnostics(root: Path, path: Path | None = None) -> list[CheckDiag
     return diagnostics
 
 
-def document_citation_diagnostics(root: Path, document: Document) -> list[CheckDiagnostic]:
+def document_citation_diagnostics(root: Path, document: Document) -> list[Diagnostic]:
     if document.frontmatter is None:
         return []
-    diagnostics: list[CheckDiagnostic] = []
+    diagnostics: list[Diagnostic] = []
     file_name = concept_id(root, document.path)
     source_entries = document.frontmatter.get("sources", [])
     ids: list[str] = []
@@ -149,11 +138,10 @@ def document_citation_diagnostics(root: Path, document: Document) -> list[CheckD
     for source_id, count in id_counts.items():
         if count > 1:
             diagnostics.append(
-                CheckDiagnostic(
+                Diagnostic(
                     "warning",
                     "duplicate-source-id",
                     file_name,
-                    None,
                     f"duplicate source ID: {source_id}",
                 )
             )
@@ -161,32 +149,31 @@ def document_citation_diagnostics(root: Path, document: Document) -> list[CheckD
         if count > 1:
             line = next(line for item, line in definitions if item == label)
             diagnostics.append(
-                CheckDiagnostic(
+                Diagnostic(
                     "warning",
                     "duplicate-footnote-definition",
                     file_name,
-                    line,
                     f"duplicate footnote definition: {label}",
+                    line=line,
                 )
             )
     for label, line in sorted((*uses, *definitions), key=lambda item: item[1]):
         if label not in known_ids:
             diagnostics.append(
-                CheckDiagnostic(
+                Diagnostic(
                     "warning",
                     "unmatched-footnote",
                     file_name,
-                    line,
                     f"footnote has no matching source ID: {label}",
+                    line=line,
                 )
             )
     for source_id in sorted(known_ids - (used_labels | defined_labels)):
         diagnostics.append(
-            CheckDiagnostic(
+            Diagnostic(
                 "warning",
                 "unused-source",
                 file_name,
-                None,
                 f"source ID is not referenced by a body footnote: {source_id}",
             )
         )

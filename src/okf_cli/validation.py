@@ -4,28 +4,22 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
+from okf_cli.diagnostics import Diagnostic
 from okf_cli.inspection import citation_diagnostics, link_diagnostics, links_for_file
-from okf_cli.metadata import STATUSES, is_stale, parse_date, parse_datetime, status
+from okf_cli.markdown import resolve_destination
+from okf_cli.metadata import (
+    STATUSES,
+    is_stale,
+    parse_date,
+    parse_datetime,
+    path_fields,
+    status,
+)
 from okf_cli.model import RESERVED_NAMES, concept_id, iter_markdown, parse_document
-
-
-@dataclass(frozen=True)
-class Diagnostic:
-    severity: str
-    code: str
-    file: str
-    message: str
-    field: str | None = None
-    line: int | None = None
-
-    def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
 
 
 def _warning(file: str, code: str, message: str, field: str | None = None) -> Diagnostic:
@@ -42,35 +36,6 @@ def _valid_actor(value: Any) -> bool:
         and bool(value.strip())
         and (value.startswith(("human:", "process:")) or "/" in value)
     )
-
-
-def _path_like(value: str) -> bool:
-    if urlsplit(value).scheme or value.startswith("//"):
-        return False
-    return (
-        value.startswith(("/", "./", "../"))
-        or "/" in value
-        or bool(re.search(r"\.[A-Za-z0-9]{1,8}(?:[?#].*)?$", value))
-    ) and not any(character.isspace() for character in value)
-
-
-def path_fields(metadata: Mapping[str, Any]) -> list[tuple[str, str]]:
-    fields: list[tuple[str, str]] = []
-    if isinstance(metadata.get("resource"), str):
-        fields.append(("resource", metadata["resource"]))
-    sources = metadata.get("sources")
-    if isinstance(sources, list):
-        for index, source in enumerate(sources):
-            if isinstance(source, Mapping) and isinstance(source.get("resource"), str):
-                fields.append((f"sources[{index}].resource", source["resource"]))
-    for name in ("computation",):
-        if isinstance(metadata.get(name), str):
-            fields.append((name, metadata[name]))
-    for family in ("executor", "attester"):
-        value = metadata.get(family)
-        if isinstance(value, Mapping) and isinstance(value.get("resource"), str):
-            fields.append((f"{family}.resource", value["resource"]))
-    return fields
 
 
 def validate_metadata(file: str, metadata: Mapping[str, Any], today: date) -> list[Diagnostic]:
@@ -493,34 +458,20 @@ def validate_bundle(root: Path, path: Path | None, today: date) -> list[Diagnost
                         "computation",
                     )
                 )
-        for field, value in path_fields(document.frontmatter):
-            if not _path_like(value):
-                continue
-            path_value = value.split("#", 1)[0].split("?", 1)[0]
-            candidate = (
-                root / path_value.lstrip("/")
-                if path_value.startswith("/")
-                else target.parent / path_value
-            )
-            resolved = candidate.resolve(strict=False)
-            if resolved.is_relative_to(root.resolve()) and not resolved.exists():
+        for ref in path_fields(document.frontmatter):
+            resolved = resolve_destination(root, target, ref.value).resolved
+            if resolved is not None and not resolved.exists():
                 diagnostics.append(
                     _warning(
                         file,
                         "missing-path-target",
-                        f"path-valued field target does not exist: {value}",
-                        field,
+                        f"path-valued field target does not exist: {ref.value}",
+                        ref.name,
                     )
                 )
 
-    for item in link_diagnostics(root, path):
-        diagnostics.append(
-            Diagnostic(item.severity, item.code, item.file, item.message, line=item.line)
-        )
-    for item in citation_diagnostics(root, path):
-        diagnostics.append(
-            Diagnostic(item.severity, item.code, item.file, item.message, line=item.line)
-        )
+    diagnostics.extend(link_diagnostics(root, path))
+    diagnostics.extend(citation_diagnostics(root, path))
 
     # A link target can sit outside the validated path, so its status is looked up on demand.
     status_by_path: dict[str, str | None] = {}

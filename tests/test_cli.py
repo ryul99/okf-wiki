@@ -667,6 +667,50 @@ def test_move_dry_run_and_transactional_rewrites(tmp_path: Path) -> None:
     run_okf("validate", cwd=bundle)
 
 
+def test_validate_and_move_agree_on_path_valued_fields(tmp_path: Path) -> None:
+    bundle = init_bundle(tmp_path)
+    (bundle / "assets").mkdir()
+    (bundle / "assets/my chart.png").write_bytes(b"")
+    write_concept(
+        bundle,
+        "a/item.md",
+        "type: Note\nresource: ../assets/my%20chart.png\n"
+        "sources:\n  - resource: notes.v2-final\n  - resource: ../assets/missing.png",
+        "\n# Item\n",
+    )
+    validation = json.loads(run_okf("validate", "--format", "json", cwd=bundle).stdout)
+    assert [
+        item["field"] for item in validation["diagnostics"] if item["code"] == "missing-path-target"
+    ] == ["sources[1].resource"]
+
+    plan = json.loads(
+        run_okf("move", "a/item", "item", "--dry-run", "--format", "json", cwd=bundle).stdout
+    )
+    assert [
+        change["location"] for change in plan["changes"] if change["kind"] == "frontmatter"
+    ] == ["resource", "sources[1].resource"]
+
+
+def test_relationship_checks_report_the_validation_diagnostic_shape(tmp_path: Path) -> None:
+    bundle = init_bundle(tmp_path)
+    write_concept(
+        bundle,
+        "note.md",
+        "type: Note\nsources:\n  - id: unused\n    resource: https://example.test",
+        "\n[broken](missing.md)\n",
+    )
+    keys = {"severity", "code", "file", "message", "field", "line"}
+    for command in (("links", "check"), ("citations", "check")):
+        diagnostics = json.loads(run_okf(*command, "--format", "json", cwd=bundle).stdout)[
+            "diagnostics"
+        ]
+        assert diagnostics
+        assert all(set(item) == keys for item in diagnostics)
+    assert run_okf("citations", "check", cwd=bundle).stdout == (
+        "warning: note: source ID is not referenced by a body footnote: unused\n"
+    )
+
+
 def test_next_mutation_recovers_interrupted_move(tmp_path: Path) -> None:
     bundle = init_bundle(tmp_path)
     concept = write_concept(

@@ -3,35 +3,36 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import json
 import os
 import shutil
 import uuid
-from collections.abc import MutableMapping
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
+from okf_cli.diagnostics import Diagnostic
 from okf_cli.errors import OperationalError, UsageError
 from okf_cli.markdown import (
     apply_replacements,
     resolve_destination,
     rewrite_destination,
     scan_links,
+    split_destination,
 )
+from okf_cli.metadata import path_fields
 from okf_cli.model import (
     RESERVED_NAMES,
     TRANSACTION_PREFIX,
     Document,
     concept_id,
     concept_path,
+    ensure_unchanged,
     iter_markdown,
     parse_document,
 )
-from okf_cli.validation import Diagnostic, validate_bundle
+from okf_cli.validation import validate_bundle
 
 
 @dataclass(frozen=True)
@@ -64,34 +65,6 @@ class MovePlan:
         }
 
 
-def _path_like(value: str) -> bool:
-    return (
-        not (urlsplit(value).scheme or value.startswith("//"))
-        and not any(character.isspace() for character in value)
-        and (value.startswith(("/", "./", "../")) or "/" in value or "." in Path(value).name)
-    )
-
-
-def _field_refs(
-    metadata: MutableMapping[str, Any],
-) -> list[tuple[str, MutableMapping[str, Any], str]]:
-    refs: list[tuple[str, MutableMapping[str, Any], str]] = []
-    if isinstance(metadata.get("resource"), str):
-        refs.append(("resource", metadata, "resource"))
-    sources = metadata.get("sources")
-    if isinstance(sources, list):
-        for index, source in enumerate(sources):
-            if isinstance(source, MutableMapping) and isinstance(source.get("resource"), str):
-                refs.append((f"sources[{index}].resource", source, "resource"))
-    if isinstance(metadata.get("computation"), str):
-        refs.append(("computation", metadata, "computation"))
-    for family in ("executor", "attester"):
-        value = metadata.get(family)
-        if isinstance(value, MutableMapping) and isinstance(value.get("resource"), str):
-            refs.append((f"{family}.resource", value, "resource"))
-    return refs
-
-
 def _rewrite_document(
     root: Path, document: Document, source: Path, destination: Path
 ) -> tuple[bytes, list[MoveChange]]:
@@ -99,53 +72,46 @@ def _rewrite_document(
     new_file = destination if old_file == source else old_file
     file_label = old_file.relative_to(root).as_posix()
     changes: list[MoveChange] = []
+
+    def rewritten(value: str) -> str | None:
+        target = resolve_destination(root, old_file, value).resolved
+        if target is None:
+            return None
+        # Relative references in the moved file must follow it even when their target stays.
+        relative = not split_destination(value)[0].startswith("/")
+        if target != source and not (old_file == source and relative):
+            return None
+        new_target = destination if target == source else target
+        result = rewrite_destination(root, old_file, new_file, value, new_target)
+        return result if result != value else None
+
     body = document.text_body
     body_line_offset = document.prefix.count(b"\n")
     replacements: list[tuple[int, int, str]] = []
     for link in scan_links(body):
-        resolved = resolve_destination(root, old_file, link.destination)
-        if resolved.external or resolved.outside or resolved.resolved is None:
-            continue
-        target = resolved.resolved
-        should_rewrite = target == source
-        if old_file == source and not link.destination.split("?", 1)[0].split("#", 1)[0].startswith(
-            "/"
-        ):
-            should_rewrite = True
-        if not should_rewrite:
-            continue
-        new_target = destination if target == source else target
-        rewritten = rewrite_destination(root, old_file, new_file, link.destination, new_target)
-        if rewritten != link.destination:
-            replacements.append((link.start, link.end, rewritten))
+        new_value = rewritten(link.destination)
+        if new_value is not None:
+            replacements.append((link.start, link.end, new_value))
             changes.append(
                 MoveChange(
                     file_label,
                     "link",
                     f"line {link.line + body_line_offset}",
                     link.destination,
-                    rewritten,
+                    new_value,
                 )
             )
 
     rendered_body = apply_replacements(body, replacements).encode("utf-8")
     if document.frontmatter is not None:
-        for field, parent, key in _field_refs(document.frontmatter):
-            value = parent[key]
-            if not isinstance(value, str) or not _path_like(value):
-                continue
-            resolved = resolve_destination(root, old_file, value)
-            if resolved.external or resolved.outside or resolved.resolved is None:
-                continue
-            target = resolved.resolved
-            relative = not value.split("?", 1)[0].split("#", 1)[0].startswith("/")
-            if target != source and not (old_file == source and relative):
-                continue
-            new_target = destination if target == source else target
-            rewritten = rewrite_destination(root, old_file, new_file, value, new_target)
-            if rewritten != value:
-                parent[key] = rewritten
-                changes.append(MoveChange(file_label, "frontmatter", field, value, rewritten))
+        for field in path_fields(document.frontmatter):
+            old_value = field.value
+            new_value = rewritten(old_value)
+            if new_value is not None:
+                field.parent[field.key] = new_value
+                changes.append(
+                    MoveChange(file_label, "frontmatter", field.name, old_value, new_value)
+                )
         document.body = rendered_body
         rendered = document.render()
     else:
@@ -256,12 +222,7 @@ def recover_transactions(root: Path) -> list[str]:
 def execute_move(root: Path, plan: MovePlan, today: date) -> None:
     before_broken = _broken_targets(root)
     for path, identity in plan.identities.items():
-        try:
-            actual = hashlib.sha256(path.read_bytes()).hexdigest()
-        except OSError as exc:
-            raise OperationalError(f"cannot recheck {path}: {exc}") from exc
-        if actual != identity:
-            raise OperationalError(f"concurrent change detected: {path}")
+        ensure_unchanged(path, identity)
     if plan.destination_path.exists():
         raise OperationalError(f"destination appeared during move: {plan.destination_path}")
 
@@ -297,8 +258,7 @@ def execute_move(root: Path, plan: MovePlan, today: date) -> None:
         )
 
         for path, identity in plan.identities.items():
-            if hashlib.sha256(path.read_bytes()).hexdigest() != identity:
-                raise OperationalError(f"concurrent change detected: {path}")
+            ensure_unchanged(path, identity)
         destination_parent.mkdir(parents=True, exist_ok=True)
         for target in sorted(plan.contents, key=lambda item: item.as_posix()):
             target.parent.mkdir(parents=True, exist_ok=True)
