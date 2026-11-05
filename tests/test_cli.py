@@ -691,6 +691,30 @@ def test_validate_and_move_agree_on_path_valued_fields(tmp_path: Path) -> None:
     ] == ["resource", "sources[1].resource"]
 
 
+def test_move_rewrites_existing_files_the_path_shape_rule_misses(tmp_path: Path) -> None:
+    bundle = init_bundle(tmp_path)
+    for name in ("config.properties", "model.safetensors", "app.code-workspace"):
+        (bundle / "a").mkdir(exist_ok=True)
+        (bundle / "a" / name).write_bytes(b"")
+    write_concept(
+        bundle,
+        "a/item.md",
+        "type: Note\nresource: config.properties\nsources:\n"
+        "  - resource: model.safetensors\n  - resource: app.code-workspace\n"
+        "  - resource: notes.v2-final",
+        "\n# Item\n",
+    )
+
+    run_okf("move", "a/item", "b/item", cwd=bundle)
+    moved = (bundle / "b/item.md").read_text(encoding="utf-8")
+    assert "resource: ../a/config.properties" in moved
+    assert "- resource: ../a/model.safetensors" in moved
+    assert "- resource: ../a/app.code-workspace" in moved
+    assert "- resource: notes.v2-final" in moved
+    validation = json.loads(run_okf("validate", "--format", "json", cwd=bundle).stdout)
+    assert not [item for item in validation["diagnostics"] if item["code"] == "missing-path-target"]
+
+
 def test_move_keeps_rewritten_destinations_valid_markdown(tmp_path: Path) -> None:
     bundle = init_bundle(tmp_path)
     (bundle / "assets").mkdir()

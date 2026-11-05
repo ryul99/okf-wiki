@@ -6,12 +6,14 @@ import re
 from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 from ruamel.yaml.comments import CommentedMap
 
 from okf_cli.errors import UsageError
+from okf_cli.markdown import resolve_destination
 
 STATUSES = ("draft", "stable", "deprecated")
 LIFECYCLE_KEYS = ("status", "stale_after")
@@ -127,7 +129,17 @@ def _is_path_like(value: str) -> bool:
     ) and not any(character.isspace() for character in value)
 
 
-def path_fields(metadata: MutableMapping[str, Any]) -> list[PathField]:
+def _is_path_value(root: Path, source: Path, value: str) -> bool:
+    if _is_path_like(value):
+        return True
+    # A name the shape rule misses, such as config.properties, is still a path to a real file.
+    resolved = resolve_destination(root, source, value).resolved
+    return resolved is not None and resolved.is_file()
+
+
+def path_fields(metadata: MutableMapping[str, Any], root: Path, source: Path) -> list[PathField]:
+    """Path-valued fields of the concept at `source`, resolved against `root`."""
+
     candidates = [PathField("resource", metadata, "resource")]
     sources = metadata.get("sources")
     if isinstance(sources, list):
@@ -144,7 +156,8 @@ def path_fields(metadata: MutableMapping[str, Any]) -> list[PathField]:
     return [
         field
         for field in candidates
-        if isinstance(field.parent.get(field.key), str) and _is_path_like(field.value)
+        if isinstance(field.parent.get(field.key), str)
+        and _is_path_value(root, source, field.value)
     ]
 
 

@@ -466,7 +466,7 @@ def _validate_path_targets(
     root: Path, target: Path, file: str, metadata: CommentedMap
 ) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
-    for ref in path_fields(metadata):
+    for ref in path_fields(metadata, root, target):
         resolved = resolve_destination(root, target, ref.value).resolved
         if resolved is not None and not resolved.exists():
             diagnostics.append(

@@ -104,7 +104,7 @@ def _rewrite_document(
 
     rendered_body = apply_replacements(body, replacements).encode("utf-8")
     if document.frontmatter is not None:
-        for field in path_fields(document.frontmatter):
+        for field in path_fields(document.frontmatter, root, old_file):
             old_value = field.value
             new_value = rewritten(old_value)
             if new_value is not None:
