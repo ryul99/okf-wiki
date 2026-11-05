@@ -514,6 +514,39 @@ def test_provenance_verification_lifecycle_and_filters(tmp_path: Path) -> None:
     assert sources[0]["usage_window"] == {"from": "2026-01-01", "to": "2026-06-30"}
 
 
+def test_trust_counts_only_verification_records(tmp_path: Path) -> None:
+    bundle = init_bundle(tmp_path)
+    for name, verified in (
+        ("null", "verified: null"),
+        ("empty", "verified: []"),
+        ("machine", "verified:\n  by: process:nightly\n  at: 2026-07-01T00:00:00Z"),
+        ("human", "verified:\n  - by: human:reviewer\n    at: 2026-07-02T00:00:00Z"),
+    ):
+        write_concept(bundle, f"{name}.md", f"type: Note\n{verified}", "\n# Note\n")
+    records = json.loads(run_okf("list", "--format", "json", cwd=bundle).stdout)
+    assert {record["id"]: record["trust"] for record in records} == {
+        "empty": "unverified",
+        "human": "human-reviewed",
+        "machine": "machine-confirmed",
+        "null": "unverified",
+    }
+
+
+def test_scoped_validation_reports_links_to_deprecated_concepts_outside_scope(
+    tmp_path: Path,
+) -> None:
+    bundle = init_bundle(tmp_path)
+    write_concept(bundle, "old.md", "type: Note\nstatus: deprecated", "\n# Old\n")
+    write_concept(bundle, "sub/new.md", "type: Note", "\n# New\n\n[old](../old.md)\n")
+    for scope in ((), ("sub",), ("sub/new",)):
+        validation = json.loads(run_okf("validate", *scope, "--format", "json", cwd=bundle).stdout)
+        assert [
+            item["file"]
+            for item in validation["diagnostics"]
+            if item["code"] == "stable-links-deprecated"
+        ] == ["sub/new"], scope
+
+
 def test_search_links_citations_and_validation_exit_codes(tmp_path: Path) -> None:
     bundle = init_bundle(tmp_path)
     write_concept(

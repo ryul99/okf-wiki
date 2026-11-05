@@ -522,12 +522,24 @@ def validate_bundle(root: Path, path: Path | None, today: date) -> list[Diagnost
             Diagnostic(item.severity, item.code, item.file, item.message, line=item.line)
         )
 
-    status_by_path: dict[str, str] = {}
-    for target in targets:
-        if target.name not in RESERVED_NAMES:
-            document = parse_document(target)
-            if document.frontmatter is not None:
-                status_by_path[target.relative_to(root).as_posix()] = status(document.frontmatter)
+    # A link target can sit outside the validated path, so its status is looked up on demand.
+    status_by_path: dict[str, str | None] = {}
+
+    def target_status(relative: str) -> str | None:
+        if relative not in status_by_path:
+            linked = root / relative
+            document = (
+                parse_document(linked)
+                if linked.suffix == ".md" and linked.name not in RESERVED_NAMES and linked.is_file()
+                else None
+            )
+            status_by_path[relative] = (
+                status(document.frontmatter)
+                if document is not None and document.frontmatter is not None
+                else None
+            )
+        return status_by_path[relative]
+
     for target in targets:
         if target.name in RESERVED_NAMES:
             continue
@@ -535,7 +547,7 @@ def validate_bundle(root: Path, path: Path | None, today: date) -> list[Diagnost
         if document.frontmatter is None or status(document.frontmatter) != "stable":
             continue
         for link in links_for_file(root, target):
-            if link.resolved_path and status_by_path.get(link.resolved_path) == "deprecated":
+            if link.resolved_path and target_status(link.resolved_path) == "deprecated":
                 diagnostics.append(
                     _warning(
                         concept_id(root, target),

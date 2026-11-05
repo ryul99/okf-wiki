@@ -42,13 +42,12 @@ def parse_datetime(value: Any) -> datetime | None:
 
 
 def trust_tier(metadata: Mapping[str, Any]) -> str:
-    if "verified" not in metadata:
+    verified = normalize_verified(metadata.get("verified"))
+    events = [event for event in verified if isinstance(event, Mapping)]
+    if not events:
         return "unverified"
-    verified = metadata.get("verified")
-    events = verified if isinstance(verified, list) else [verified]
-    for event in events:
-        if isinstance(event, Mapping) and str(event.get("by", "")).startswith("human:"):
-            return "human-reviewed"
+    if any(str(event.get("by", "")).startswith("human:") for event in events):
+        return "human-reviewed"
     return "machine-confirmed"
 
 
