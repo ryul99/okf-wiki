@@ -6,6 +6,9 @@ updates YAML frontmatter, writes concept bodies, validates bundles, searches
 content, checks links and citations, reports trust and lifecycle state, and
 performs recoverable concept moves.
 
+> This repository is vibe-coded: most of its code and docs are written by AI
+> coding agents under human direction.
+
 ## Installation
 
 Install the `okf` command directly from GitHub with `uv`:
