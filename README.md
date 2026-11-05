@@ -82,6 +82,7 @@ This project uses Python 3.11 or newer and [`uv`](https://docs.astral.sh/uv/).
 
 ```sh
 uv sync --all-groups
+uv run pre-commit install
 uv run okf --help
 uv run pytest
 uv run pre-commit run --all-files
