@@ -91,6 +91,19 @@ uv run pytest
 uv run pre-commit run --all-files
 ```
 
+The CLI reads its version from the installed package metadata, which is generated
+from `[project].version` in `pyproject.toml`. To change the version, update that
+field, then run:
+
+```sh
+uv sync --all-groups
+uv run okf --version
+uv run pytest tests/test_cli.py -k version_matches_project_metadata
+```
+
+Commit the resulting `uv.lock` update with `pyproject.toml`. Existing installations
+must be upgraded or reinstalled to pick up a new release.
+
 ## Quick start
 
 ```sh

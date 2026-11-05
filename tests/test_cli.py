@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,16 @@ def init_bundle(tmp_path: Path) -> Path:
     bundle = tmp_path / "bundle"
     run_okf("init", str(bundle), cwd=tmp_path)
     return bundle
+
+
+def test_version_matches_project_metadata(tmp_path: Path) -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    project = tomllib.loads((project_root / "pyproject.toml").read_text(encoding="utf-8"))
+
+    result = run_okf("--version", cwd=tmp_path)
+
+    assert result.stdout == f"okf {project['project']['version']}\n"
+    assert result.stderr == ""
 
 
 def test_help_describes_each_command(tmp_path: Path) -> None:
