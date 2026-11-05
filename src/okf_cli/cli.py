@@ -31,6 +31,7 @@ from okf_cli.inspection import (
 from okf_cli.metadata import (
     LIFECYCLE_KEYS,
     STATUSES,
+    TRUST_TIERS,
     Filters,
     dotted_get,
     dotted_set,
@@ -90,11 +91,7 @@ def _format(args: argparse.Namespace) -> str:
 
 
 def _json(value: Any) -> None:
-    print(
-        json.dumps(
-            yaml_plain(value), ensure_ascii=False, sort_keys=False, separators=(",", ":")
-        )
-    )
+    print(json.dumps(yaml_plain(value), ensure_ascii=False, sort_keys=False, separators=(",", ":")))
 
 
 def _yaml_text(value: Any) -> str:
@@ -860,8 +857,8 @@ def _dry(parser: argparse.ArgumentParser) -> None:
 def _add_filters(parser: argparse.ArgumentParser, *, today: bool = True) -> None:
     parser.add_argument("--type", dest="filter_type")
     parser.add_argument("--tag")
-    parser.add_argument("--status", choices=("draft", "stable", "deprecated"))
-    parser.add_argument("--trust", choices=("unverified", "machine-confirmed", "human-reviewed"))
+    parser.add_argument("--status", choices=STATUSES)
+    parser.add_argument("--trust", choices=TRUST_TIERS)
     parser.add_argument("--stale", action="store_true")
     parser.add_argument("--due-before")
     _common(parser, today=today)
@@ -897,7 +894,7 @@ def build_parser() -> ArgumentParser:
     new.add_argument("--description")
     new.add_argument("--resource")
     new.add_argument("--tag", dest="tags", action="append", default=[])
-    new.add_argument("--status", choices=("draft", "stable", "deprecated"))
+    new.add_argument("--status", choices=STATUSES)
     new.add_argument("--generated-by", default=os.environ.get("OKF_ACTOR"))
     _common(new)
     _dry(new)

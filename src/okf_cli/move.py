@@ -23,6 +23,7 @@ from okf_cli.markdown import (
     scan_links,
 )
 from okf_cli.model import (
+    RESERVED_NAMES,
     TRANSACTION_PREFIX,
     Document,
     concept_id,
@@ -177,7 +178,7 @@ def build_move_plan(root: Path, source_value: str, destination_value: str, today
         )
     ]
     for path in iter_markdown(root):
-        document = parse_document(path, require_frontmatter=path.name not in {"index.md", "log.md"})
+        document = parse_document(path, require_frontmatter=path.name not in RESERVED_NAMES)
         rendered, file_changes = _rewrite_document(root, document, source, destination)
         if file_changes or path == source:
             if document.error:

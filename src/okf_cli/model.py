@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import tempfile
 from collections.abc import Iterator
@@ -50,8 +51,6 @@ class Document:
     def render(self) -> bytes:
         if self.frontmatter is None:
             return self.raw
-        import io
-
         stream = io.StringIO()
         _yaml().dump(self.frontmatter, stream)
         yaml_bytes = stream.getvalue().encode("utf-8")
@@ -123,17 +122,9 @@ def discover_root(start: Path, override: str | Path | None, *, inspection: bool 
     raise UsageError("no OKF bundle found; run 'okf init' or pass --root")
 
 
-def is_within(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-        return True
-    except ValueError:
-        return False
-
-
 def safe_resolve(root: Path, path: Path) -> Path:
     resolved = path.resolve(strict=False)
-    if not is_within(resolved, root.resolve()):
+    if not resolved.is_relative_to(root.resolve()):
         raise UsageError(f"path escapes bundle root: {path}")
     return resolved
 
@@ -173,11 +164,11 @@ def iter_markdown(root: Path, path: Path | None = None) -> Iterator[Path]:
             d
             for d in dirs
             if not d.startswith(TRANSACTION_PREFIX)
-            and is_within((directory_path / d).resolve(), root.resolve())
+            and (directory_path / d).resolve().is_relative_to(root.resolve())
         )
         for name in files:
             candidate = directory_path / name
-            if name.endswith(".md") and is_within(candidate.resolve(), root.resolve()):
+            if name.endswith(".md") and candidate.resolve().is_relative_to(root.resolve()):
                 found.append(candidate)
     yield from sorted(found, key=lambda item: item.relative_to(root).as_posix())
 

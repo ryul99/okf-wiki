@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
@@ -11,9 +11,9 @@ from ruamel.yaml.comments import CommentedMap
 
 from okf_cli.errors import UsageError
 
-STATUSES = {"draft", "stable", "deprecated"}
+STATUSES = ("draft", "stable", "deprecated")
 LIFECYCLE_KEYS = ("status", "stale_after")
-TRUST_TIERS = {"unverified", "machine-confirmed", "human-reviewed"}
+TRUST_TIERS = ("unverified", "machine-confirmed", "human-reviewed")
 
 
 def parse_date(value: Any) -> date | None:
@@ -95,9 +95,9 @@ class Filters:
             return False
         if self.trust is not None and trust_tier(metadata) != self.trust:
             return False
-        stale_after = parse_date(metadata.get("stale_after"))
         if self.stale and not is_stale(metadata, today):
             return False
+        stale_after = parse_date(metadata.get("stale_after"))
         return not (
             self.due_before is not None and (stale_after is None or stale_after > self.due_before)
         )
@@ -145,9 +145,3 @@ def normalize_verified(value: Any) -> list[Any]:
     if isinstance(value, list):
         return value
     return [value] if isinstance(value, Mapping) else []
-
-
-def string_list(value: Any) -> Sequence[str] | None:
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        return None
-    return value

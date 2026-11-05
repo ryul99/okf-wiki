@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from okf_cli.inspection import citation_diagnostics, link_diagnostics, links_for_file
-from okf_cli.metadata import is_stale, parse_date, parse_datetime, status
+from okf_cli.metadata import STATUSES, is_stale, parse_date, parse_datetime, status
 from okf_cli.model import RESERVED_NAMES, concept_id, iter_markdown, parse_document
 
 
@@ -101,7 +101,7 @@ def validate_metadata(file: str, metadata: Mapping[str, Any], today: date) -> li
         diagnostics.append(
             _warning(file, "invalid-tags", "tags should be a list of non-empty strings", "tags")
         )
-    if "status" in metadata and metadata["status"] not in {"draft", "stable", "deprecated"}:
+    if "status" in metadata and metadata["status"] not in STATUSES:
         diagnostics.append(
             _warning(
                 file, "invalid-status", "status should be draft, stable, or deprecated", "status"

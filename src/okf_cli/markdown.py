@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from okf_cli.model import is_within
-
 FENCE_RE = re.compile(r"^[ ]{0,3}(`{3,}|~{3,})")
 REFERENCE_RE = re.compile(r"^[ ]{0,3}\[([^\]^][^\]]*)\]:[ \t]*(?:<([^>\n]+)>|([^ \t\n]+))")
 FOOTNOTE_USE_RE = re.compile(r"\[\^([^\]]+)\]")
@@ -22,13 +20,10 @@ class Link:
     start: int
     end: int
     line: int
-    style: str
 
 
 @dataclass(frozen=True)
 class ResolvedLink:
-    source: Path
-    link: Link
     resolved: Path | None
     external: bool
     outside: bool
@@ -90,9 +85,7 @@ def scan_links(text: str) -> list[Link]:
             start = offset + match.start(group)
             end = offset + match.end(group)
             label = " ".join(match.group(1).split()).casefold()
-            definitions[label] = Link(
-                text[start:end], start, end, _line_number(text, start), "reference"
-            )
+            definitions[label] = Link(text[start:end], start, end, _line_number(text, start))
             definition_spans.add((offset + match.start(), offset + match.end()))
         offset += len(line)
 
@@ -174,7 +167,7 @@ def scan_links(text: str) -> list[Link]:
                 cursor += 1
             end = cursor
         if end > start and not any(a <= index < b for a, b in definition_spans):
-            links.append(Link(text[start:end], start, end, _line_number(text, start), "inline"))
+            links.append(Link(text[start:end], start, end, _line_number(text, start)))
         index = max(close + 1, end)
     return sorted(links, key=lambda link: link.start)
 
@@ -191,14 +184,12 @@ def resolve_destination(root: Path, source: Path, destination: str) -> ResolvedL
     path_part, _ = split_destination(destination)
     parsed = urlsplit(path_part)
     if not path_part or path_part.startswith("#") or parsed.scheme or path_part.startswith("//"):
-        return ResolvedLink(source, Link(destination, 0, 0, 0, ""), None, True, False)
+        return ResolvedLink(None, True, False)
     decoded = unquote(path_part)
     candidate = root / decoded.lstrip("/") if decoded.startswith("/") else source.parent / decoded
     resolved = candidate.resolve(strict=False)
-    outside = not is_within(resolved, root.resolve())
-    return ResolvedLink(
-        source, Link(destination, 0, 0, 0, ""), None if outside else resolved, False, outside
-    )
+    outside = not resolved.is_relative_to(root.resolve())
+    return ResolvedLink(None if outside else resolved, False, outside)
 
 
 def rewrite_destination(

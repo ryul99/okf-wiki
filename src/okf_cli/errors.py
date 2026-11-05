@@ -17,9 +17,3 @@ class OperationalError(OkfError):
     """Filesystem or parsing failure."""
 
     exit_code = 3
-
-
-class CheckError(OkfError):
-    """A validation or requested check found errors."""
-
-    exit_code = 1
