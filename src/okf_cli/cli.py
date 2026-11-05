@@ -44,6 +44,7 @@ from okf_cli.metadata import (
     trust_tier,
 )
 from okf_cli.model import (
+    TRANSACTION_PREFIX,
     Document,
     atomic_write,
     concept_id,
@@ -110,26 +111,51 @@ def _print_diff(document: Document, proposed: bytes) -> None:
     )
 
 
+def _apply_mutation(
+    args: argparse.Namespace, document: Document, proposed: bytes, *, allowed: bool = True
+) -> tuple[bool, bool]:
+    """Show or write a proposed file and report whether it changed and was written."""
+
+    changed = proposed != document.raw and allowed
+    written = changed and not args.dry_run
+    if args.dry_run and _format(args) != "json":
+        _print_diff(document, proposed)
+    elif written:
+        atomic_write(document.path, proposed, expected_identity=document.identity)
+    return changed, written
+
+
 def _finish_mutation(
     root: Path,
     args: argparse.Namespace,
     document: Document,
-    proposed: bytes,
     fields: Mapping[str, Any],
 ) -> None:
-    changed = proposed != document.raw
-    if args.dry_run and _format(args) != "json":
-        _print_diff(document, proposed)
-    elif changed and not args.dry_run:
-        atomic_write(document.path, proposed, expected_identity=document.identity)
+    changed, _ = _apply_mutation(args, document, document.render())
     if _format(args) == "json":
         _json({"id": concept_id(root, document.path), **fields, "changed": changed})
+
+
+def _finish_creation(
+    args: argparse.Namespace, path: Path, content: bytes, payload: dict[str, Any], message: str
+) -> None:
+    if not args.dry_run:
+        atomic_write(path, content)
+    if _format(args) == "json":
+        result = {**payload, "changed": True}
+        if args.dry_run:
+            result["content"] = content.decode()
+        _json(result)
+    elif args.dry_run:
+        sys.stdout.buffer.write(content)
+    else:
+        print(message)
 
 
 def _prepare_mutation(args: argparse.Namespace) -> Path:
     root = _root(args)
     if getattr(args, "dry_run", False):
-        pending = sorted(root.glob(".okf-transaction-*"))
+        pending = sorted(root.glob(f"{TRANSACTION_PREFIX}*"))
         if pending:
             raise OperationalError(
                 "an interrupted transaction must be recovered by a non-dry-run mutation first"
@@ -205,18 +231,13 @@ def cmd_init(args: argparse.Namespace) -> int:
     if index.exists():
         raise UsageError(f"refusing to overwrite existing file: {index}")
     content = f'---\nokf_version: "{args.version}"\n---\n\n# Concepts\n'.encode()
-    if not args.dry_run:
-        target.mkdir(parents=True, exist_ok=True)
-        atomic_write(index, content)
-    if _format(args) == "json":
-        payload: dict[str, Any] = {"path": str(index), "version": args.version, "changed": True}
-        if args.dry_run:
-            payload["content"] = content.decode()
-        _json(payload)
-    elif args.dry_run:
-        sys.stdout.buffer.write(content)
-    else:
-        print(f"initialized OKF bundle at {target}")
+    _finish_creation(
+        args,
+        index,
+        content,
+        {"path": str(index), "version": args.version},
+        f"initialized OKF bundle at {target}",
+    )
     return 0
 
 
@@ -239,24 +260,17 @@ def cmd_new(args: argparse.Namespace) -> int:
         metadata["status"] = args.status
     if args.generated_by is not None:
         metadata["generated"] = CommentedMap({"by": args.generated_by, "at": _utc_now()})
-    document = Document(path, b"", metadata, b"\n", b"")
-    proposed = document.render()
-    if not args.dry_run:
-        atomic_write(path, proposed)
-    if _format(args) == "json":
-        payload: dict[str, Any] = {
+    _finish_creation(
+        args,
+        path,
+        Document(path, b"", metadata, b"\n", b"").render(),
+        {
             "id": concept_id(root, path),
             "path": path.relative_to(root).as_posix(),
             "generated_by": args.generated_by,
-            "changed": True,
-        }
-        if args.dry_run:
-            payload["content"] = proposed.decode()
-        _json(payload)
-    elif args.dry_run:
-        sys.stdout.buffer.write(proposed)
-    else:
-        print(concept_id(root, path))
+        },
+        concept_id(root, path),
+    )
     return 0
 
 
@@ -346,43 +360,34 @@ def cmd_search(args: argparse.Namespace) -> int:
         metadata = document.frontmatter
         if metadata is None or not filters.matches(metadata, today):
             continue
-        candidates: list[tuple[str, str]] = [("id", concept_id(root, path))]
+        concept = concept_id(root, path)
+        candidates: list[tuple[str, str, int | None]] = [("id", concept, None)]
         for field in ("type", "title", "description"):
             if isinstance(metadata.get(field), str):
-                candidates.append((field, metadata[field]))
+                candidates.append((field, metadata[field], None))
         tags = metadata.get("tags", [])
         if isinstance(tags, list):
-            candidates.extend(("tags", tag) for tag in tags if isinstance(tag, str))
-        for field, text in candidates:
+            candidates.extend(("tags", tag, None) for tag in tags if isinstance(tag, str))
+        if not args.metadata_only:
+            first_body_line = document.prefix.count(b"\n") + 1
+            candidates.extend(
+                ("body", line, number)
+                for number, line in enumerate(
+                    document.text_body.splitlines(), start=first_body_line
+                )
+            )
+        for field, text, line_number in candidates:
             haystack = text if args.case_sensitive else text.casefold()
             position = haystack.find(needle)
             if position >= 0:
                 results.append(
                     {
-                        "id": concept_id(root, path),
+                        "id": concept,
                         "field": field,
                         "excerpt": text[max(0, position - 40) : position + len(args.query) + 40],
-                        "line": None,
+                        "line": line_number,
                     }
                 )
-        if not args.metadata_only:
-            first_body_line = document.prefix.count(b"\n") + 1
-            for line_number, line in enumerate(
-                document.text_body.splitlines(), start=first_body_line
-            ):
-                haystack = line if args.case_sensitive else line.casefold()
-                position = haystack.find(needle)
-                if position >= 0:
-                    results.append(
-                        {
-                            "id": concept_id(root, path),
-                            "field": "body",
-                            "excerpt": line[
-                                max(0, position - 40) : position + len(args.query) + 40
-                            ],
-                            "line": line_number,
-                        }
-                    )
     if args.limit is not None and len(results) > args.limit:
         results = results[: args.limit]
         print(f"note: more matches exist beyond --limit {args.limit}", file=sys.stderr)
@@ -457,9 +462,8 @@ def _parse_meta_value(raw: str, value_type: str | None) -> Any:
 
 def cmd_meta_get(args: argparse.Namespace) -> int:
     root = _root(args, inspection=True)
-    document = require_mutable_document(root, args.concept)
-    assert document.frontmatter is not None
-    value = document.frontmatter if args.key is None else dotted_get(document.frontmatter, args.key)
+    _, metadata = require_mutable_document(root, args.concept)
+    value = metadata if args.key is None else dotted_get(metadata, args.key)
     if _format(args) == "json":
         _json(value)
     elif isinstance(value, Mapping | list):
@@ -471,13 +475,12 @@ def cmd_meta_get(args: argparse.Namespace) -> int:
 
 def cmd_meta_set(args: argparse.Namespace) -> int:
     root = _prepare_mutation(args)
-    document = require_mutable_document(root, args.concept)
-    assert document.frontmatter is not None
+    document, metadata = require_mutable_document(root, args.concept)
     value = _parse_meta_value(args.value, args.value_type)
     if args.key == "type" and (not isinstance(value, str) or not value.strip()):
         raise UsageError("type must remain a non-empty string")
-    dotted_set(document.frontmatter, args.key, value)
-    _finish_mutation(root, args, document, document.render(), {"key": args.key, "value": value})
+    dotted_set(metadata, args.key, value)
+    _finish_mutation(root, args, document, {"key": args.key, "value": value})
     return 0
 
 
@@ -485,10 +488,9 @@ def cmd_meta_unset(args: argparse.Namespace) -> int:
     if args.key == "type" or args.key.startswith("type."):
         raise UsageError("the required type field cannot be removed")
     root = _prepare_mutation(args)
-    document = require_mutable_document(root, args.concept)
-    assert document.frontmatter is not None
-    dotted_unset(document.frontmatter, args.key)
-    _finish_mutation(root, args, document, document.render(), {"key": args.key})
+    document, metadata = require_mutable_document(root, args.concept)
+    dotted_unset(metadata, args.key)
+    _finish_mutation(root, args, document, {"key": args.key})
     return 0
 
 
@@ -531,19 +533,14 @@ def _new_body_warnings(root: Path, before: Document, after: Document) -> list[Di
 
 def cmd_body_set(args: argparse.Namespace) -> int:
     root = _prepare_mutation(args)
-    document = require_mutable_document(root, args.concept)
+    document, _ = require_mutable_document(root, args.concept)
     if args.if_match is not None and args.if_match != document.identity:
         raise OperationalError(f"{document.path}: content identity does not match --if-match")
     body = _read_body_input(args.from_file)
     proposed = parse_bytes(document.path, document.prefix + body)
     warnings = _new_body_warnings(root, document, proposed)
     is_blocked = bool(args.warnings_as_errors and warnings)
-    is_changed = proposed.raw != document.raw and not is_blocked
-    is_written = is_changed and not args.dry_run
-    if args.dry_run and _format(args) != "json":
-        _print_diff(document, proposed.raw)
-    elif is_written:
-        atomic_write(document.path, proposed.raw, expected_identity=document.identity)
+    is_changed, is_written = _apply_mutation(args, document, proposed.raw, allowed=not is_blocked)
     if _format(args) == "json":
         payload: dict[str, Any] = {
             "id": concept_id(root, document.path),
@@ -601,9 +598,8 @@ def cmd_tag_list(args: argparse.Namespace) -> int:
 
 def cmd_tag(args: argparse.Namespace) -> int:
     root = _prepare_mutation(args)
-    document = require_mutable_document(root, args.concept)
-    assert document.frontmatter is not None
-    existing = document.frontmatter.get("tags", [])
+    document, metadata = require_mutable_document(root, args.concept)
+    existing = metadata.get("tags", [])
     if not isinstance(existing, list) or not all(isinstance(tag, str) for tag in existing):
         raise OperationalError("existing tags field is not a list of strings")
     tags = list(existing)
@@ -613,18 +609,17 @@ def cmd_tag(args: argparse.Namespace) -> int:
         removal = set(args.tags)
         tags = [tag for tag in tags if tag not in removal]
     if tags:
-        document.frontmatter["tags"] = CommentedSeq(tags)
+        metadata["tags"] = CommentedSeq(tags)
     else:
-        document.frontmatter.pop("tags", None)
-    _finish_mutation(root, args, document, document.render(), {"tags": tags})
+        metadata.pop("tags", None)
+    _finish_mutation(root, args, document, {"tags": tags})
     return 0
 
 
 def cmd_source_list(args: argparse.Namespace) -> int:
     root = _root(args, inspection=True)
-    document = require_mutable_document(root, args.concept)
-    assert document.frontmatter is not None
-    sources = document.frontmatter.get("sources", [])
+    _, metadata = require_mutable_document(root, args.concept)
+    sources = metadata.get("sources", [])
     if _format(args) == "json":
         _json(sources)
     elif sources:
@@ -634,11 +629,10 @@ def cmd_source_list(args: argparse.Namespace) -> int:
 
 def cmd_source_add(args: argparse.Namespace) -> int:
     root = _prepare_mutation(args)
-    document = require_mutable_document(root, args.concept)
-    assert document.frontmatter is not None
+    document, metadata = require_mutable_document(root, args.concept)
     if not args.resource.strip():
         raise UsageError("--resource must be non-empty")
-    sources = document.frontmatter.get("sources", [])
+    sources = metadata.get("sources", [])
     if not isinstance(sources, list):
         raise OperationalError("existing sources field is not a list")
     if args.source_id is not None and any(
@@ -671,16 +665,15 @@ def cmd_source_add(args: argparse.Namespace) -> int:
         raise UsageError("--usage-count must be non-negative")
     updated = CommentedSeq(sources)
     updated.append(source)
-    document.frontmatter["sources"] = updated
-    _finish_mutation(root, args, document, document.render(), {"added": source})
+    metadata["sources"] = updated
+    _finish_mutation(root, args, document, {"added": source})
     return 0
 
 
 def cmd_source_remove(args: argparse.Namespace) -> int:
     root = _prepare_mutation(args)
-    document = require_mutable_document(root, args.concept)
-    assert document.frontmatter is not None
-    sources = document.frontmatter.get("sources", [])
+    document, metadata = require_mutable_document(root, args.concept)
+    sources = metadata.get("sources", [])
     if not isinstance(sources, list):
         raise OperationalError("existing sources field is not a list")
     updated = [
@@ -695,18 +688,17 @@ def cmd_source_remove(args: argparse.Namespace) -> int:
         )
     ]
     if updated:
-        document.frontmatter["sources"] = CommentedSeq(updated)
+        metadata["sources"] = CommentedSeq(updated)
     else:
-        document.frontmatter.pop("sources", None)
+        metadata.pop("sources", None)
     removed = len(sources) - len(updated)
-    _finish_mutation(root, args, document, document.render(), {"removed": removed})
+    _finish_mutation(root, args, document, {"removed": removed})
     return 0
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
     root = _prepare_mutation(args)
-    document = require_mutable_document(root, args.concept)
-    assert document.frontmatter is not None
+    document, metadata = require_mutable_document(root, args.concept)
     if not args.by.strip():
         raise UsageError("--by must be non-empty")
     at = args.at or _utc_now()
@@ -716,28 +708,27 @@ def cmd_verify(args: argparse.Namespace) -> int:
         raise UsageError("--at must be an ISO 8601 datetime") from exc
     if parsed_at.tzinfo is None:
         at = parsed_at.replace(tzinfo=UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
-    events = normalize_verified(document.frontmatter.get("verified"))
+    events = normalize_verified(metadata.get("verified"))
     events.append(CommentedMap({"by": args.by, "at": at}))
-    document.frontmatter["verified"] = CommentedSeq(events)
-    _finish_mutation(root, args, document, document.render(), {"verification": events[-1]})
+    metadata["verified"] = CommentedSeq(events)
+    _finish_mutation(root, args, document, {"verification": events[-1]})
     return 0
 
 
 def cmd_lifecycle_mutate(args: argparse.Namespace) -> int:
     root = _prepare_mutation(args)
-    document = require_mutable_document(root, args.concept)
-    assert document.frontmatter is not None
+    document, metadata = require_mutable_document(root, args.concept)
     fields: dict[str, Any] = {"key": args.key}
     if args.lifecycle_action == "unset":
-        document.frontmatter.pop(args.key, None)
+        metadata.pop(args.key, None)
     else:
         if args.key == "status" and args.value not in STATUSES:
             raise UsageError(f"status must be one of: {', '.join(sorted(STATUSES))}")
         if args.key == "stale_after" and parse_date(args.value) is None:
             raise UsageError("stale_after must use YYYY-MM-DD")
-        document.frontmatter[args.key] = args.value
+        metadata[args.key] = args.value
         fields["value"] = args.value
-    _finish_mutation(root, args, document, document.render(), fields)
+    _finish_mutation(root, args, document, fields)
     return 0
 
 
@@ -746,22 +737,13 @@ def cmd_links(args: argparse.Namespace) -> int:
     if args.links_action == "outgoing":
         path = concept_path(root, args.concept)
         records = links_for_file(root, path)
-    elif args.links_action == "backlinks":
+    else:
         target = concept_path(root, args.concept)
         records = [
             record
             for record in all_links(root)
             if record.resolved_path == target.relative_to(root).as_posix()
         ]
-    else:
-        records = []
-        diagnostics = link_diagnostics(root, _target_path(root, args.path))
-        if _format(args) == "json":
-            _json({"diagnostics": [item.as_dict() for item in diagnostics]})
-        else:
-            for item in diagnostics:
-                print(item.as_text())
-        return 1 if args.warnings_as_errors and diagnostics else 0
     if _format(args) == "json":
         _json([record.as_dict() for record in records])
     else:
@@ -783,15 +765,23 @@ def cmd_links(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_citations(args: argparse.Namespace) -> int:
-    root = _root(args, inspection=True)
-    diagnostics = citation_diagnostics(root, _target_path(root, args.path))
+def _report_check(args: argparse.Namespace, diagnostics: list[Diagnostic]) -> int:
     if _format(args) == "json":
         _json({"diagnostics": [item.as_dict() for item in diagnostics]})
     else:
         for item in diagnostics:
             print(item.as_text())
     return 1 if args.warnings_as_errors and diagnostics else 0
+
+
+def cmd_links_check(args: argparse.Namespace) -> int:
+    root = _root(args, inspection=True)
+    return _report_check(args, link_diagnostics(root, _target_path(root, args.path)))
+
+
+def cmd_citations(args: argparse.Namespace) -> int:
+    root = _root(args, inspection=True)
+    return _report_check(args, citation_diagnostics(root, _target_path(root, args.path)))
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
@@ -1042,7 +1032,7 @@ def build_parser() -> ArgumentParser:
     links_check.add_argument("path", nargs="?")
     links_check.add_argument("--warnings-as-errors", action="store_true")
     _common(links_check)
-    links_check.set_defaults(handler=cmd_links)
+    links_check.set_defaults(handler=cmd_links_check)
 
     citations = _command(commands, "citations", "Inspect source citations.")
     citations_commands = citations.add_subparsers(dest="citations_action", required=True)

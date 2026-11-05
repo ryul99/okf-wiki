@@ -211,14 +211,16 @@ def atomic_write(path: Path, data: bytes, *, expected_identity: str | None = Non
         raise OperationalError(f"cannot write {path}: {exc}") from exc
 
 
-def require_mutable_document(root: Path, value: str) -> Document:
+def require_mutable_document(root: Path, value: str) -> tuple[Document, CommentedMap]:
+    """Load a concept with valid frontmatter, returned alongside as a non-optional mapping."""
+
     path = concept_path(root, value)
     if not path.is_file():
         raise OperationalError(f"concept does not exist: {value}")
     doc = parse_document(path, require_frontmatter=True)
     if doc.error or doc.frontmatter is None:
         raise OperationalError(f"{path}: {doc.error or 'invalid frontmatter'}")
-    return doc
+    return doc, doc.frontmatter
 
 
 def yaml_plain(value: Any) -> Any:
