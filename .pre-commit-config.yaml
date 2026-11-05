@@ -9,7 +9,7 @@ repos:
     rev: v1.17.1
     hooks:
       - id: mypy
-        additional_dependencies: [rich==14.3.4, ruamel.yaml==0.18.15]
+        additional_dependencies: [marko==2.2.5, rich==14.3.4, ruamel.yaml==0.18.15]
         args: [--strict, src/okf_cli]
         pass_filenames: false
   - repo: https://github.com/pre-commit/pre-commit-hooks

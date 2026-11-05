@@ -15,10 +15,10 @@ from typing import Any
 from okf_cli.diagnostics import Diagnostic
 from okf_cli.errors import OperationalError, UsageError
 from okf_cli.markdown import (
+    ParsedMarkdown,
     apply_replacements,
     resolve_destination,
     rewrite_destination,
-    scan_links,
     split_destination,
 )
 from okf_cli.metadata import path_fields
@@ -88,7 +88,7 @@ def _rewrite_document(
     body = document.text_body
     body_line_offset = document.prefix.count(b"\n")
     replacements: list[tuple[int, int, str]] = []
-    for link in scan_links(body):
+    for link in ParsedMarkdown(body).links():
         new_value = rewritten(link.destination)
         if new_value is not None:
             replacements.append((link.start, link.end, new_value))
@@ -179,7 +179,7 @@ def _broken_targets(root: Path) -> set[str]:
     targets: set[str] = set()
     for path in iter_markdown(root):
         document = parse_document(path)
-        for link in scan_links(document.text_body):
+        for link in ParsedMarkdown(document.text_body).links():
             resolved = resolve_destination(root, path, link.destination)
             if not resolved.external and (
                 resolved.resolved is None or not resolved.resolved.exists()

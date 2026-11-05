@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
@@ -12,7 +11,7 @@ from ruamel.yaml.comments import CommentedMap
 
 from okf_cli.diagnostics import Diagnostic
 from okf_cli.inspection import citation_diagnostics, link_diagnostics, links_for_file
-from okf_cli.markdown import resolve_destination
+from okf_cli.markdown import ParsedMarkdown, resolve_destination
 from okf_cli.metadata import (
     STATUSES,
     is_stale,
@@ -398,14 +397,14 @@ def _validate_reserved(root: Path, target: Path, document: Document) -> list[Dia
                     "okf_version",
                 )
             )
-    body = document.text_body
-    if target.name == "index.md" and not re.search(r"(?m)^#{1,6}[ \t]+\S", body):
+    headings = ParsedMarkdown(document.text_body).headings()
+    if target.name == "index.md" and not any(heading.text for heading in headings):
         diagnostics.append(
             _error(relative, "invalid-index", "index.md should contain a section heading")
         )
     if target.name == "log.md":
-        headings = re.findall(r"(?m)^##[ \t]+(.+?)[ \t]*$", body)
-        if not re.search(r"(?m)^#[ \t]+\S", body) or not headings:
+        dates = [heading.text for heading in headings if heading.level == 2]
+        if not any(heading.level == 1 and heading.text for heading in headings) or not dates:
             diagnostics.append(
                 _error(
                     relative,
@@ -419,7 +418,7 @@ def _validate_reserved(root: Path, target: Path, document: Document) -> list[Dia
                 "invalid-log-date",
                 f"log date heading must use YYYY-MM-DD: {heading}",
             )
-            for heading in headings
+            for heading in dates
             if parse_date(heading) is None or len(heading) != 10
         )
     return diagnostics
@@ -428,20 +427,9 @@ def _validate_reserved(root: Path, target: Path, document: Document) -> list[Dia
 def _validate_inline_computation(
     file: str, metadata: Mapping[str, Any], body: str
 ) -> list[Diagnostic]:
-    computation_section = re.search(
-        r"(?ms)^#[ \t]+Computation[ \t]*\r?$\n(.*?)(?=^#[ \t]+|\Z)",
-        body,
-    )
-    fenced_blocks = (
-        re.findall(
-            r"(?ms)^[ ]{0,3}(`{3,}|~{3,})[^\n]*\n.*?^\1[ \t]*$",
-            computation_section.group(1),
-        )
-        if computation_section
-        else []
-    )
+    fenced_blocks = ParsedMarkdown(body).fenced_blocks_in_section("Computation") or 0
     external_computation = metadata.get("computation")
-    if external_computation is None and len(fenced_blocks) != 1:
+    if external_computation is None and fenced_blocks != 1:
         return [
             _warning(
                 file,

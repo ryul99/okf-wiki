@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from okf_cli.diagnostics import Diagnostic
-from okf_cli.markdown import footnotes, resolve_destination, scan_links
+from okf_cli.markdown import ParsedMarkdown, resolve_destination
 from okf_cli.model import RESERVED_NAMES, Document, concept_id, iter_markdown, parse_document
 
 
@@ -41,7 +41,7 @@ def links_for_document(root: Path, document: Document) -> list[LinkRecord]:
         if path.name not in RESERVED_NAMES
         else path.relative_to(root).as_posix()
     )
-    for link in scan_links(text):
+    for link in ParsedMarkdown(text).links():
         resolved = resolve_destination(root, path, link.destination)
         relative = (
             resolved.resolved.relative_to(root).as_posix()
@@ -126,7 +126,7 @@ def document_citation_diagnostics(root: Path, document: Document) -> list[Diagno
         for entry in source_entries:
             if isinstance(entry, Mapping) and isinstance(entry.get("id"), str):
                 ids.append(entry["id"])
-    uses, definitions = footnotes(document.text_body)
+    uses, definitions = ParsedMarkdown(document.text_body).footnotes()
     body_line_offset = document.prefix.count(b"\n")
     uses = [(label, line + body_line_offset) for label, line in uses]
     definitions = [(label, line + body_line_offset) for label, line in definitions]

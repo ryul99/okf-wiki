@@ -1,17 +1,28 @@
-"""Source-span Markdown links and footnotes without body reformatting."""
+"""Markdown structure located by marko, with source spans into the original body text."""
 
 from __future__ import annotations
 
 import os
 import re
+from bisect import bisect_left
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
-FENCE_RE = re.compile(r"^[ ]{0,3}(`{3,}|~{3,})")
-REFERENCE_RE = re.compile(r"^[ ]{0,3}\[([^\]^][^\]]*)\]:[ \t]*(?:<([^>\n]+)>|([^ \t\n]+))")
-FOOTNOTE_USE_RE = re.compile(r"\[\^([^\]]+)\]")
-FOOTNOTE_DEF_RE = re.compile(r"^[ ]{0,3}\[\^([^\]]+)\]:", re.MULTILINE)
+from marko import Markdown, block, inline
+from marko.element import Element
+from marko.ext.footnote import FootnoteDef, FootnoteRef
+from marko.helpers import MarkoExtension, normalize_label
+
+
+class _AdjacentFootnoteDef(FootnoteDef):
+    # GFM ends a footnote at the next definition line; marko would read it as lazy continuation.
+    override = True
+    breaks_paragraph = True
+
+
+_MARKDOWN = Markdown(extensions=["footnote", MarkoExtension(elements=[_AdjacentFootnoteDef])])
 
 
 @dataclass(frozen=True)
@@ -23,153 +34,147 @@ class Link:
 
 
 @dataclass(frozen=True)
+class Heading:
+    level: int
+    text: str
+    line: int
+
+
+@dataclass(frozen=True)
 class ResolvedLink:
     resolved: Path | None
     external: bool
     outside: bool
 
 
-def _line_number(text: str, offset: int) -> int:
-    return text.count("\n", 0, offset) + 1
+def _walk(element: Element) -> Iterator[Element]:
+    yield element
+    children = getattr(element, "children", None)
+    if isinstance(children, list):
+        for child in children:
+            yield from _walk(child)
 
 
-def _active_ranges(text: str) -> list[tuple[int, int]]:
-    ranges: list[tuple[int, int]] = []
-    offset = 0
-    fence: str | None = None
-    html_block = False
-    for line in text.splitlines(keepends=True):
-        stripped = line.lstrip(" ")
-        fence_match = FENCE_RE.match(line)
-        excluded = False
-        if fence is not None:
-            excluded = True
-            if re.match(
-                rf"^[ ]{{0,3}}{re.escape(fence[0])}{{{len(fence)},}}[ \t]*$", line.rstrip("\r\n")
-            ):
-                fence = None
-        elif fence_match:
-            fence = fence_match.group(1)
-            excluded = True
-        elif line.startswith(("    ", "\t")):
-            excluded = True
-        elif html_block:
-            excluded = True
-            if ">" in line:
-                html_block = False
-        elif stripped.startswith(("<script", "<style", "<pre", "<!--")):
-            excluded = True
-            html_block = not (
-                "</script>" in line or "</style>" in line or "</pre>" in line or "-->" in line
-            )
-        if not excluded:
-            ranges.append((offset, offset + len(line)))
-        offset += len(line)
-    return ranges
+class ParsedMarkdown:
+    """One marko parse of a body, exposing the parts OKF inspects as original-text offsets."""
 
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.document = _MARKDOWN.parse(text)
+        # marko parses CRLF as LF, so every span after a CRLF is short by one per CRLF.
+        self._crlf_offsets = [
+            match.start() - count for count, match in enumerate(re.finditer("\r\n", text))
+        ]
 
-def _is_active(offset: int, ranges: list[tuple[int, int]]) -> bool:
-    return any(start <= offset < end for start, end in ranges)
+    def _offset(self, position: int) -> int:
+        return position + bisect_left(self._crlf_offsets, position)
 
+    def _span(self, span: tuple[int, int]) -> tuple[int, int]:
+        return self._offset(span[0]), self._offset(span[1])
 
-def scan_links(text: str) -> list[Link]:
-    active = _active_ranges(text)
-    links: list[Link] = []
-    definitions: dict[str, Link] = {}
-    definition_spans: set[tuple[int, int]] = set()
-    offset = 0
-    for line in text.splitlines(keepends=True):
-        match = REFERENCE_RE.match(line)
-        if match and _is_active(offset + match.start(), active):
-            group = 2 if match.group(2) is not None else 3
-            start = offset + match.start(group)
-            end = offset + match.end(group)
-            label = " ".join(match.group(1).split()).casefold()
-            definitions[label] = Link(text[start:end], start, end, _line_number(text, start))
-            definition_spans.add((offset + match.start(), offset + match.end()))
-        offset += len(line)
+    def _start(self, element: Element) -> int:
+        return self._offset(element.source_span[0]) if element.source_span else 0
 
-    used_references: set[str] = set()
-    reference_use = re.compile(r"(?<!!)\[([^\]^\n]+)\](?:\[([^\]\n]*)\])?")
-    for match in reference_use.finditer(text):
-        if not _is_active(match.start(), active) or any(
-            start <= match.start() < end for start, end in definition_spans
-        ):
-            continue
-        trailing = text[match.end() : match.end() + 1]
-        if match.group(2) is None and trailing == "(":
-            continue
-        label = match.group(2) if match.group(2) else match.group(1)
-        normalized = " ".join(label.split()).casefold()
-        if normalized in definitions:
-            used_references.add(normalized)
-    links.extend(definitions[label] for label in definitions if label in used_references)
+    def _line(self, offset: int) -> int:
+        return self.text.count("\n", 0, offset) + 1
 
-    index = 0
-    length = len(text)
-    while index < length:
-        if text[index] != "[" or not _is_active(index, active):
-            index += 1
-            continue
-        if index > 0 and text[index - 1] in ("!", "\\"):
-            index += 1
-            continue
-        if index + 1 < length and text[index + 1] == "^":
-            index += 1
-            continue
-        close = index + 1
-        bracket_depth = 1
-        while close < length and bracket_depth:
-            if text[close] == "\\":
-                close += 2
+    def _link(self, start: int, end: int) -> Link | None:
+        if self.text.startswith("<", start) and self.text[end - 1 : end] == ">":
+            start, end = start + 1, end - 1
+        if end <= start:
+            return None
+        return Link(self.text[start:end], start, end, self._line(start))
+
+    def _reference_label(self, link: inline.Link) -> str | None:
+        if not link.syntax_spans:
+            return None
+        opening = self._span(link.syntax_spans[0])
+        closing = self._span(link.syntax_spans[-1])
+        suffix = self.text[closing[0] : closing[1]]
+        if suffix.startswith("][") and len(suffix) > 3:
+            return normalize_label(suffix[2:-1])
+        return normalize_label(self.text[opening[1] : closing[0]])
+
+    def links(self) -> list[Link]:
+        """Inline link destinations plus the definitions that reference links use."""
+
+        links: list[Link] = []
+        used_labels: set[str] = set()
+        definitions: dict[str, block.LinkRefDef] = {}
+        for element in _walk(self.document):
+            if isinstance(element, inline.Link):
+                if element.dest_span is not None:
+                    link = self._link(*self._span(element.dest_span))
+                    if link is not None:
+                        links.append(link)
+                elif (label := self._reference_label(element)) is not None:
+                    used_labels.add(label)
+            elif isinstance(element, block.LinkRefDef):
+                definitions.setdefault(element.label, element)
+        for label, definition in definitions.items():
+            if label not in used_labels or definition.source_span is None:
                 continue
-            if text[close] == "[":
-                bracket_depth += 1
-            elif text[close] == "]":
-                bracket_depth -= 1
-            close += 1
-        if bracket_depth or close >= length:
-            index += 1
-            continue
-        opening = close
-        while opening < length and text[opening] in " \t\n":
-            opening += 1
-        if opening >= length or text[opening] != "(":
-            index += 1
-            continue
-        cursor = opening + 1
-        while cursor < length and text[cursor] in " \t\n":
-            cursor += 1
-        if cursor >= length:
-            break
-        if text[cursor] == "<":
-            start = cursor + 1
-            end = text.find(">", start)
-            if end < 0:
-                index += 1
+            start, end = self._span(definition.source_span)
+            source = self.text[start:end]
+            position = source.find(definition.dest, source.find("]:") + 2)
+            if position >= 0:
+                link = self._link(start + position, start + position + len(definition.dest))
+                if link is not None:
+                    links.append(link)
+        return sorted(links, key=lambda link: link.start)
+
+    def footnotes(self) -> tuple[list[tuple[str, int]], list[tuple[str, int]]]:
+        """Footnote uses and definitions as (label, line), labels kept as written."""
+
+        uses: list[tuple[int, str]] = []
+        definitions: list[tuple[int, str]] = []
+        for element in _walk(self.document):
+            if element.source_span is None:
                 continue
-        else:
-            start = cursor
-            depth = 0
-            while cursor < length:
-                char = text[cursor]
-                if char == "\\":
-                    cursor += 2
-                    continue
-                if char == "(":
-                    depth += 1
-                elif char == ")":
-                    if depth == 0:
-                        break
-                    depth -= 1
-                elif char in " \t\n" and depth == 0:
+            start, end = self._span(element.source_span)
+            if isinstance(element, FootnoteRef):
+                uses.append((start, self.text[start + 2 : end - 1]))
+            elif isinstance(element, FootnoteDef):
+                source = self.text[start:end]
+                label_start = len(source) - len(source.lstrip(" ")) + 2
+                definitions.append((start, source[label_start : source.index("]:")]))
+            elif isinstance(element, inline.RawText):
+                # Without a definition marko leaves [^label] as text, but it still cites a source.
+                uses.extend(
+                    (match.start(), match.group(1))
+                    for match in FootnoteRef.pattern.finditer(self.text, start, end)
+                )
+        return (
+            [(label, self._line(offset)) for offset, label in sorted(uses)],
+            [(label, self._line(offset)) for offset, label in sorted(definitions)],
+        )
+
+    def headings(self) -> list[Heading]:
+        """Top-level headings with their text as written, closing markers excluded."""
+
+        return [
+            Heading(element.level, self._heading_text(element), self._line(self._start(element)))
+            for element in self.document.children
+            if isinstance(element, block.Heading | block.SetextHeading)
+        ]
+
+    def fenced_blocks_in_section(self, title: str) -> int | None:
+        """Count fenced code blocks under the level-1 heading `title`, or None if it is absent."""
+
+        count: int | None = None
+        for element in self.document.children:
+            if isinstance(element, block.Heading | block.SetextHeading) and element.level == 1:
+                if count is not None:
                     break
-                cursor += 1
-            end = cursor
-        if end > start and not any(a <= index < b for a, b in definition_spans):
-            links.append(Link(text[start:end], start, end, _line_number(text, start)))
-        index = max(close + 1, end)
-    return sorted(links, key=lambda link: link.start)
+                if self._heading_text(element) == title:
+                    count = 0
+            elif count is not None:
+                count += sum(isinstance(item, block.FencedCode) for item in _walk(element))
+        return count
+
+    def _heading_text(self, heading: block.Heading | block.SetextHeading) -> str:
+        spans = [child.source_span for child in heading.children if child.source_span]
+        return self.text[self._offset(spans[0][0]) : self._offset(spans[-1][1])] if spans else ""
 
 
 def split_destination(destination: str) -> tuple[str, str]:
@@ -218,19 +223,3 @@ def apply_replacements(text: str, replacements: list[tuple[int, int, str]]) -> s
     for start, end, replacement in sorted(replacements, reverse=True):
         result = result[:start] + replacement + result[end:]
     return result
-
-
-def footnotes(text: str) -> tuple[list[tuple[str, int]], list[tuple[str, int]]]:
-    active = _active_ranges(text)
-    definitions: list[tuple[str, int]] = []
-    uses: list[tuple[str, int]] = []
-    definition_offsets: set[int] = set()
-    for match in FOOTNOTE_DEF_RE.finditer(text):
-        if _is_active(match.start(), active):
-            definitions.append((match.group(1), _line_number(text, match.start())))
-            definition_offsets.add(text.rfind("\n", 0, match.start()) + 1)
-    for match in FOOTNOTE_USE_RE.finditer(text):
-        line_start = text.rfind("\n", 0, match.start()) + 1
-        if _is_active(match.start(), active) and line_start not in definition_offsets:
-            uses.append((match.group(1), _line_number(text, match.start())))
-    return uses, definitions

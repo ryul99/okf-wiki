@@ -831,3 +831,92 @@ def test_reserved_and_attested_computation_structure(tmp_path: Path) -> None:
     codes = {item["code"] for item in result["diagnostics"]}
     assert "invalid-inline-computation" in codes
     assert "invalid-log-date" in codes
+
+
+def test_code_spans_are_not_links(tmp_path: Path) -> None:
+    bundle = init_bundle(tmp_path)
+    write_concept(bundle, "a/other.md", "type: Note", "\n# Other\n")
+    write_concept(
+        bundle,
+        "a/doc.md",
+        "type: Note",
+        "\nUse `[label](target.md)` syntax. See [other](other.md).\n",
+    )
+    assert json.loads(run_okf("links", "check", "--format", "json", cwd=bundle).stdout) == {
+        "diagnostics": []
+    }
+    plan = json.loads(
+        run_okf("move", "a/doc", "b/doc", "--dry-run", "--format", "json", cwd=bundle).stdout
+    )
+    assert [change["before"] for change in plan["changes"] if change["kind"] == "link"] == [
+        "other.md"
+    ]
+
+
+def test_move_rewrites_crlf_bodies_in_place(tmp_path: Path) -> None:
+    bundle = init_bundle(tmp_path)
+    write_concept(bundle, "a/other.md", "type: Note", "\n# Other\n")
+    (bundle / "a/doc.md").write_bytes(
+        b"---\ntype: Note\n---\r\nSee [inline](other.md) and [ref][r].\r\n\r\n[r]: other.md\r\n"
+    )
+    run_okf("move", "a/doc", "b/doc", cwd=bundle)
+    assert (
+        (bundle / "b/doc.md")
+        .read_bytes()
+        .endswith(b"See [inline](../a/other.md) and [ref][r].\r\n\r\n[r]: ../a/other.md\r\n")
+    )
+
+
+def test_reference_definitions_follow_commonmark(tmp_path: Path) -> None:
+    bundle = init_bundle(tmp_path)
+    write_concept(
+        bundle,
+        "doc.md",
+        "type: Note",
+        "\n> [q]\n>\n> [q]: quoted.md\n\n[x][d]\n\n[d]: first.md\n[d]: second.md\n",
+    )
+    outgoing = json.loads(
+        run_okf("links", "outgoing", "doc", "--format", "json", cwd=bundle).stdout
+    )
+    assert [record["destination"] for record in outgoing] == ["quoted.md", "first.md"]
+
+
+def test_footnotes_keep_label_case_and_ignore_code_spans(tmp_path: Path) -> None:
+    bundle = init_bundle(tmp_path)
+    write_concept(
+        bundle,
+        "doc.md",
+        "type: Note\nsources:\n  - id: Policy\n    resource: https://example.test/policy\n"
+        "  - id: Other\n    resource: https://example.test/other",
+        "\nDefined[^Policy] and undefined[^Other], not `[^Ghost]`.\n\n[^Policy]: Evidence\n",
+    )
+    assert json.loads(run_okf("citations", "check", "--format", "json", cwd=bundle).stdout) == {
+        "diagnostics": []
+    }
+
+
+def test_reserved_files_are_checked_by_markdown_structure(tmp_path: Path) -> None:
+    bundle = init_bundle(tmp_path)
+    (bundle / "index.md").write_text(
+        '---\nokf_version: "0.2"\n---\n\n```md\n# Not a heading\n```\n', encoding="utf-8"
+    )
+    (bundle / "log.md").write_text(
+        "Directory Log\n=============\n\n## 2026-01-02\n", encoding="utf-8"
+    )
+    validation = json.loads(run_okf("validate", "--format", "json", cwd=bundle, expected=1).stdout)
+    assert [(item["file"], item["code"]) for item in validation["diagnostics"]] == [
+        ("index.md", "invalid-index")
+    ]
+
+
+def test_adjacent_footnote_definitions_are_separate(tmp_path: Path) -> None:
+    bundle = init_bundle(tmp_path)
+    write_concept(
+        bundle,
+        "doc.md",
+        "type: Note\nsources:\n  - id: a\n    resource: https://example.test/a\n"
+        "  - id: b\n    resource: https://example.test/b",
+        "\nText[^a] and[^b].\n\n[^a]: Source A\n[^b]: Source B\n[^a]: Again\n",
+    )
+    citations = json.loads(run_okf("citations", "check", "--format", "json", cwd=bundle).stdout)
+    assert [item["code"] for item in citations["diagnostics"]] == ["duplicate-footnote-definition"]
