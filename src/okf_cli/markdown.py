@@ -6,7 +6,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 FENCE_RE = re.compile(r"^[ ]{0,3}(`{3,}|~{3,})")
 REFERENCE_RE = re.compile(r"^[ ]{0,3}\[([^\]^][^\]]*)\]:[ \t]*(?:<([^>\n]+)>|([^ \t\n]+))")
@@ -202,7 +202,15 @@ def rewrite_destination(
         rewritten = os.path.relpath(target, new_source.parent).replace(os.sep, "/")
         if path_part.startswith("./") and not rewritten.startswith("../"):
             rewritten = "./" + rewritten
-    return rewritten + suffix
+    return _encode_like(path_part, rewritten) + suffix
+
+
+def _encode_like(original: str, path: str) -> str:
+    # Destinations are resolved decoded, so a rewrite must restore the author's encoding style.
+    if unquote(original) != original:
+        return quote(path, safe="/")
+    # Raw style stays raw, but whitespace would end the Markdown destination.
+    return "".join(quote(character) if character.isspace() else character for character in path)
 
 
 def apply_replacements(text: str, replacements: list[tuple[int, int, str]]) -> str:

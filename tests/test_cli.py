@@ -691,6 +691,30 @@ def test_validate_and_move_agree_on_path_valued_fields(tmp_path: Path) -> None:
     ] == ["resource", "sources[1].resource"]
 
 
+def test_move_keeps_rewritten_destinations_valid_markdown(tmp_path: Path) -> None:
+    bundle = init_bundle(tmp_path)
+    (bundle / "assets").mkdir()
+    (bundle / "assets/my chart.png").write_bytes(b"")
+    write_concept(bundle, "한글.md", "type: Note", "\n# Korean\n")
+    write_concept(bundle, "my dir/other.md", "type: Note", "\n# Other\n")
+    write_concept(
+        bundle,
+        "a/item.md",
+        "type: Note\nresource: ../assets/my%20chart.png",
+        "\n[chart](../assets/my%20chart.png) [korean](../한글.md)\n",
+    )
+    write_concept(bundle, "my dir/spaced.md", "type: Note", "\n[other](other.md)\n")
+
+    run_okf("move", "a/item", "b/c/item", cwd=bundle)
+    moved = (bundle / "b/c/item.md").read_text(encoding="utf-8")
+    assert "resource: ../../assets/my%20chart.png" in moved
+    assert "[chart](../../assets/my%20chart.png) [korean](../../한글.md)" in moved
+
+    run_okf("move", "my dir/spaced", "spaced", cwd=bundle)
+    assert "[other](my%20dir/other.md)" in (bundle / "spaced.md").read_text(encoding="utf-8")
+    run_okf("validate", cwd=bundle)
+
+
 def test_relationship_checks_report_the_validation_diagnostic_shape(tmp_path: Path) -> None:
     bundle = init_bundle(tmp_path)
     write_concept(
