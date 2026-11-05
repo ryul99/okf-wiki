@@ -42,4 +42,5 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+mypy_path = "src"
 packages = ["okf_cli"]
