@@ -22,6 +22,12 @@ RESERVED_NAMES = {"index.md", "log.md"}
 TRANSACTION_PREFIX = ".okf-transaction-"
 
 
+def to_lf(data: bytes) -> bytes:
+    """Line endings okf writes when it re-renders a file, so one file never mixes them."""
+
+    return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 def content_identity(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -86,7 +92,7 @@ class Document:
         stream = io.StringIO()
         _yaml().dump(self.frontmatter, stream)
         yaml_bytes = stream.getvalue().encode("utf-8")
-        return b"---\n" + yaml_bytes + b"---\n" + self.body
+        return b"---\n" + yaml_bytes + b"---\n" + to_lf(self.body)
 
 
 def parse_document(path: Path) -> Document:

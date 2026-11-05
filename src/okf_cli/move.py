@@ -31,6 +31,7 @@ from okf_cli.model import (
     ensure_unchanged,
     iter_markdown,
     parse_document,
+    to_lf,
 )
 from okf_cli.validation import validate_bundle
 
@@ -118,7 +119,7 @@ def _rewrite_document(
         rendered = document.render()
     else:
         body_start = len(document.raw) - len(document.body)
-        rendered = document.raw[:body_start] + rendered_body
+        rendered = to_lf(document.raw[:body_start] + rendered_body)
     return rendered, changes
 
 

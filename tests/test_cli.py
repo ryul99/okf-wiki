@@ -853,18 +853,32 @@ def test_code_spans_are_not_links(tmp_path: Path) -> None:
     ]
 
 
-def test_move_rewrites_crlf_bodies_in_place(tmp_path: Path) -> None:
+def test_move_rewrites_crlf_files_as_lf(tmp_path: Path) -> None:
     bundle = init_bundle(tmp_path)
     write_concept(bundle, "a/other.md", "type: Note", "\n# Other\n")
     (bundle / "a/doc.md").write_bytes(
-        b"---\ntype: Note\n---\r\nSee [inline](other.md) and [ref][r].\r\n\r\n[r]: other.md\r\n"
+        b"---\r\ntype: Note\r\n---\r\nSee [inline](other.md) and [ref][r].\r\n\r\n[r]: other.md\r\n"
     )
+    (bundle / "a/index.md").write_bytes(b"# A\r\n\r\n[doc](doc.md)\r\n")
+
     run_okf("move", "a/doc", "b/doc", cwd=bundle)
-    assert (
-        (bundle / "b/doc.md")
-        .read_bytes()
-        .endswith(b"See [inline](../a/other.md) and [ref][r].\r\n\r\n[r]: ../a/other.md\r\n")
+    assert (bundle / "b/doc.md").read_bytes() == (
+        b"---\ntype: Note\n---\nSee [inline](../a/other.md) and [ref][r].\n\n[r]: ../a/other.md\n"
     )
+    assert (bundle / "a/index.md").read_bytes() == b"# A\n\n[doc](../b/doc.md)\n"
+
+
+def test_frontmatter_commands_write_lf_while_body_set_keeps_bytes(tmp_path: Path) -> None:
+    bundle = init_bundle(tmp_path)
+    crlf = b"---\r\ntype: Note\r\n---\r\n# Note\r\n\r\nBody.\r\n"
+    note = bundle / "note.md"
+    note.write_bytes(crlf)
+    run_okf("tag", "add", "note", "draft", cwd=bundle)
+    assert note.read_bytes() == b"---\ntype: Note\ntags:\n- draft\n---\n# Note\n\nBody.\n"
+
+    note.write_bytes(crlf)
+    run_okf("body", "set", "note", cwd=bundle, stdin="# Note\r\n\r\nNew body.\r\n")
+    assert note.read_bytes() == b"---\r\ntype: Note\r\n---\r\n# Note\r\n\r\nNew body.\r\n"
 
 
 def test_reference_definitions_follow_commonmark(tmp_path: Path) -> None:
