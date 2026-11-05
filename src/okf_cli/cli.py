@@ -26,7 +26,7 @@ from okf_cli.inspection import (
     document_citation_diagnostics,
     document_link_diagnostics,
     link_diagnostics,
-    links_for_file,
+    links_for_document,
 )
 from okf_cli.metadata import (
     LIFECYCLE_KEYS,
@@ -45,6 +45,7 @@ from okf_cli.metadata import (
 )
 from okf_cli.model import (
     TRANSACTION_PREFIX,
+    Bundle,
     Document,
     atomic_write,
     concept_id,
@@ -281,7 +282,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     filters = _filters(args)
     records: list[dict[str, Any]] = []
     for path in iter_concepts(root, target):
-        document = parse_document(path, require_frontmatter=True)
+        document = parse_document(path)
         if document.frontmatter is not None and filters.matches(document.frontmatter, today):
             records.append(_record(root, path, document.frontmatter, today))
     if _format(args) == "json":
@@ -356,7 +357,7 @@ def cmd_search(args: argparse.Namespace) -> int:
     for path in iter_concepts(root):
         if args.limit is not None and len(results) > args.limit:
             break
-        document = parse_document(path, require_frontmatter=True)
+        document = parse_document(path)
         metadata = document.frontmatter
         if metadata is None or not filters.matches(metadata, today):
             continue
@@ -565,7 +566,7 @@ def cmd_tag_list(args: argparse.Namespace) -> int:
     target = _target_path(root, args.path)
     counts: dict[str, int] = {}
     for path in iter_concepts(root, target):
-        document = parse_document(path, require_frontmatter=True)
+        document = parse_document(path)
         if document.frontmatter is None:
             continue
         tags = document.frontmatter.get("tags", [])
@@ -736,12 +737,12 @@ def cmd_links(args: argparse.Namespace) -> int:
     root = _root(args, inspection=True)
     if args.links_action == "outgoing":
         path = concept_path(root, args.concept)
-        records = links_for_file(root, path)
+        records = links_for_document(root, parse_document(path))
     else:
         target = concept_path(root, args.concept)
         records = [
             record
-            for record in all_links(root)
+            for record in all_links(Bundle(root))
             if record.resolved_path == target.relative_to(root).as_posix()
         ]
     if _format(args) == "json":
@@ -776,17 +777,17 @@ def _report_check(args: argparse.Namespace, diagnostics: list[Diagnostic]) -> in
 
 def cmd_links_check(args: argparse.Namespace) -> int:
     root = _root(args, inspection=True)
-    return _report_check(args, link_diagnostics(root, _target_path(root, args.path)))
+    return _report_check(args, link_diagnostics(Bundle(root), _target_path(root, args.path)))
 
 
 def cmd_citations(args: argparse.Namespace) -> int:
     root = _root(args, inspection=True)
-    return _report_check(args, citation_diagnostics(root, _target_path(root, args.path)))
+    return _report_check(args, citation_diagnostics(Bundle(root), _target_path(root, args.path)))
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
     root = _root(args, inspection=True)
-    diagnostics = validate_bundle(root, _target_path(root, args.path), _today(args))
+    diagnostics = validate_bundle(Bundle(root), _target_path(root, args.path), _today(args))
     errors = [item for item in diagnostics if item.severity == "error"]
     warnings = [item for item in diagnostics if item.severity == "warning"]
     if _format(args) == "json":

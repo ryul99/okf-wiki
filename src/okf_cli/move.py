@@ -15,7 +15,6 @@ from typing import Any
 from okf_cli.diagnostics import Diagnostic
 from okf_cli.errors import OperationalError, UsageError
 from okf_cli.markdown import (
-    ParsedMarkdown,
     apply_replacements,
     resolve_destination,
     rewrite_destination,
@@ -25,6 +24,7 @@ from okf_cli.metadata import path_fields
 from okf_cli.model import (
     RESERVED_NAMES,
     TRANSACTION_PREFIX,
+    Bundle,
     Document,
     concept_id,
     concept_path,
@@ -53,6 +53,8 @@ class MovePlan:
     identities: dict[Path, str]
     source_path: Path
     destination_path: Path
+    # Taken while planning so the post-move check reports only links the move broke.
+    broken_before: set[str]
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -88,7 +90,7 @@ def _rewrite_document(
     body = document.text_body
     body_line_offset = document.prefix.count(b"\n")
     replacements: list[tuple[int, int, str]] = []
-    for link in ParsedMarkdown(body).links():
+    for link in document.markdown.links():
         new_value = rewritten(link.destination)
         if new_value is not None:
             replacements.append((link.start, link.end, new_value))
@@ -143,21 +145,25 @@ def build_move_plan(root: Path, source_value: str, destination_value: str, today
             destination.relative_to(root).as_posix(),
         )
     ]
+    broken_before: set[str] = set()
     for path in iter_markdown(root):
-        document = parse_document(path, require_frontmatter=path.name not in RESERVED_NAMES)
+        document = parse_document(path)
+        broken_before |= _broken_link_targets(root, document)
         rendered, file_changes = _rewrite_document(root, document, source, destination)
         if file_changes or path == source:
-            if document.error:
-                raise OperationalError(f"cannot move because {path} is invalid: {document.error}")
+            problem = document.error if path.name in RESERVED_NAMES else document.concept_error
+            if problem:
+                raise OperationalError(f"cannot move because {path} is invalid: {problem}")
             target = destination if path == source else path
             contents[target] = rendered
             identities[path] = document.identity
             changes.extend(file_changes)
 
+    bundle = Bundle(root)
     for changed_path in identities:
         errors = [
             diagnostic
-            for diagnostic in validate_bundle(root, changed_path, today)
+            for diagnostic in validate_bundle(bundle, changed_path, today)
             if diagnostic.severity == "error"
         ]
         if errors:
@@ -172,21 +178,18 @@ def build_move_plan(root: Path, source_value: str, destination_value: str, today
         identities,
         source,
         destination,
+        broken_before,
     )
 
 
-def _broken_targets(root: Path) -> set[str]:
+def _broken_link_targets(root: Path, document: Document) -> set[str]:
     targets: set[str] = set()
-    for path in iter_markdown(root):
-        document = parse_document(path)
-        for link in ParsedMarkdown(document.text_body).links():
-            resolved = resolve_destination(root, path, link.destination)
-            if not resolved.external and (
-                resolved.resolved is None or not resolved.resolved.exists()
-            ):
-                targets.add(
-                    str(resolved.resolved) if resolved.resolved is not None else link.destination
-                )
+    for link in document.markdown.links():
+        resolved = resolve_destination(root, document.path, link.destination)
+        if not resolved.external and (resolved.resolved is None or not resolved.resolved.exists()):
+            targets.add(
+                str(resolved.resolved) if resolved.resolved is not None else link.destination
+            )
     return targets
 
 
@@ -220,7 +223,6 @@ def recover_transactions(root: Path) -> list[str]:
 
 
 def execute_move(root: Path, plan: MovePlan, today: date) -> None:
-    before_broken = _broken_targets(root)
     for path, identity in plan.identities.items():
         ensure_unchanged(path, identity)
     if plan.destination_path.exists():
@@ -265,14 +267,19 @@ def execute_move(root: Path, plan: MovePlan, today: date) -> None:
             os.replace(staged / target.relative_to(root), target)
         plan.source_path.unlink()
 
-        new_broken = _broken_targets(root) - before_broken
+        moved = Bundle(root)
+        new_broken = {
+            target
+            for path in moved.files()
+            for target in _broken_link_targets(root, moved.document(path))
+        } - plan.broken_before
         if new_broken:
             raise OperationalError(f"move introduced an unresolved link: {sorted(new_broken)[0]}")
         errors: list[Diagnostic] = []
         for target in plan.contents:
             errors.extend(
                 diagnostic
-                for diagnostic in validate_bundle(root, target, today)
+                for diagnostic in validate_bundle(moved, target, today)
                 if diagnostic.severity == "error"
             )
         if errors:

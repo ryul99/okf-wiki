@@ -7,7 +7,7 @@ import io
 import os
 import tempfile
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -16,6 +16,7 @@ from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.error import YAMLError
 
 from okf_cli.errors import OperationalError, UsageError
+from okf_cli.markdown import ParsedMarkdown
 
 RESERVED_NAMES = {"index.md", "log.md"}
 TRANSACTION_PREFIX = ".okf-transaction-"
@@ -49,10 +50,21 @@ class Document:
     body: bytes
     prefix: bytes
     error: str | None = None
+    _markdown: tuple[bytes, ParsedMarkdown] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     @property
     def identity(self) -> str:
         return content_identity(self.raw)
+
+    @property
+    def concept_error(self) -> str | None:
+        """Why this file cannot be a concept, which needs frontmatter unlike reserved files."""
+
+        if self.error is None and self.frontmatter is None:
+            return "missing YAML frontmatter"
+        return self.error
 
     @property
     def text_body(self) -> str:
@@ -60,6 +72,13 @@ class Document:
             return self.body.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise OperationalError(f"{self.path}: body is not valid UTF-8") from exc
+
+    @property
+    def markdown(self) -> ParsedMarkdown:
+        # Keyed on the body object because a move rewrites the body in place.
+        if self._markdown is None or self._markdown[0] is not self.body:
+            self._markdown = (self.body, ParsedMarkdown(self.text_body))
+        return self._markdown[1]
 
     def render(self) -> bytes:
         if self.frontmatter is None:
@@ -70,18 +89,17 @@ class Document:
         return b"---\n" + yaml_bytes + b"---\n" + self.body
 
 
-def parse_document(path: Path, *, require_frontmatter: bool = False) -> Document:
+def parse_document(path: Path) -> Document:
     try:
         raw = path.read_bytes()
     except OSError as exc:
         raise OperationalError(f"cannot read {path}: {exc}") from exc
-    return parse_bytes(path, raw, require_frontmatter=require_frontmatter)
+    return parse_bytes(path, raw)
 
 
-def parse_bytes(path: Path, raw: bytes, *, require_frontmatter: bool = False) -> Document:
+def parse_bytes(path: Path, raw: bytes) -> Document:
     if not raw.startswith(b"---\n") and not raw.startswith(b"---\r\n"):
-        error = "missing YAML frontmatter" if require_frontmatter else None
-        return Document(path, raw, None, raw, b"", error)
+        return Document(path, raw, None, raw, b"")
 
     lines = raw.splitlines(keepends=True)
     closing = None
@@ -192,6 +210,29 @@ def iter_concepts(root: Path, path: Path | None = None) -> Iterator[Path]:
             yield candidate
 
 
+class Bundle:
+    """Bundle files as they are on disk, each listed, read, and parsed at most once.
+
+    A command that writes files must read the result through a new Bundle.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self._documents: dict[Path, Document] = {}
+        self._files: dict[Path | None, list[Path]] = {}
+
+    def files(self, path: Path | None = None) -> list[Path]:
+        if path not in self._files:
+            self._files[path] = list(iter_markdown(self.root, path))
+        return self._files[path]
+
+    def document(self, path: Path) -> Document:
+        key = path.resolve()
+        if key not in self._documents:
+            self._documents[key] = parse_document(path)
+        return self._documents[key]
+
+
 def atomic_write(path: Path, data: bytes, *, expected_identity: str | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if expected_identity is not None:
@@ -217,9 +258,9 @@ def require_mutable_document(root: Path, value: str) -> tuple[Document, Commente
     path = concept_path(root, value)
     if not path.is_file():
         raise OperationalError(f"concept does not exist: {value}")
-    doc = parse_document(path, require_frontmatter=True)
-    if doc.error or doc.frontmatter is None:
-        raise OperationalError(f"{path}: {doc.error or 'invalid frontmatter'}")
+    doc = parse_document(path)
+    if doc.concept_error is not None or doc.frontmatter is None:
+        raise OperationalError(f"{path}: {doc.concept_error or 'invalid frontmatter'}")
     return doc, doc.frontmatter
 
 

@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from okf_cli.diagnostics import Diagnostic
-from okf_cli.markdown import ParsedMarkdown, resolve_destination
-from okf_cli.model import RESERVED_NAMES, Document, concept_id, iter_markdown, parse_document
+from okf_cli.markdown import resolve_destination
+from okf_cli.model import RESERVED_NAMES, Bundle, Document, concept_id
 
 
 @dataclass(frozen=True)
@@ -27,13 +27,8 @@ class LinkRecord:
         return asdict(self)
 
 
-def links_for_file(root: Path, path: Path) -> list[LinkRecord]:
-    return links_for_document(root, parse_document(path))
-
-
 def links_for_document(root: Path, document: Document) -> list[LinkRecord]:
     path = document.path
-    text = document.text_body
     body_line_offset = document.prefix.count(b"\n")
     records: list[LinkRecord] = []
     source_name = (
@@ -41,7 +36,7 @@ def links_for_document(root: Path, document: Document) -> list[LinkRecord]:
         if path.name not in RESERVED_NAMES
         else path.relative_to(root).as_posix()
     )
-    for link in ParsedMarkdown(text).links():
+    for link in document.markdown.links():
         resolved = resolve_destination(root, path, link.destination)
         relative = (
             resolved.resolved.relative_to(root).as_posix()
@@ -63,9 +58,11 @@ def links_for_document(root: Path, document: Document) -> list[LinkRecord]:
     return records
 
 
-def all_links(root: Path, path: Path | None = None) -> list[LinkRecord]:
+def all_links(bundle: Bundle, path: Path | None = None) -> list[LinkRecord]:
     return [
-        record for source in iter_markdown(root, path) for record in links_for_file(root, source)
+        record
+        for source in bundle.files(path)
+        for record in links_for_document(bundle.root, bundle.document(source))
     ]
 
 
@@ -89,10 +86,10 @@ def _link_diagnostic(record: LinkRecord) -> Diagnostic | None:
     return None
 
 
-def link_diagnostics(root: Path, path: Path | None = None) -> list[Diagnostic]:
+def link_diagnostics(bundle: Bundle, path: Path | None = None) -> list[Diagnostic]:
     return [
         diagnostic
-        for record in all_links(root, path)
+        for record in all_links(bundle, path)
         if (diagnostic := _link_diagnostic(record)) is not None
     ]
 
@@ -105,13 +102,11 @@ def document_link_diagnostics(root: Path, document: Document) -> list[Diagnostic
     ]
 
 
-def citation_diagnostics(root: Path, path: Path | None = None) -> list[Diagnostic]:
+def citation_diagnostics(bundle: Bundle, path: Path | None = None) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
-    for source in iter_markdown(root, path):
-        if source.name in RESERVED_NAMES:
-            continue
-        document = parse_document(source, require_frontmatter=True)
-        diagnostics.extend(document_citation_diagnostics(root, document))
+    for source in bundle.files(path):
+        if source.name not in RESERVED_NAMES:
+            diagnostics.extend(document_citation_diagnostics(bundle.root, bundle.document(source)))
     return diagnostics
 
 
@@ -126,7 +121,7 @@ def document_citation_diagnostics(root: Path, document: Document) -> list[Diagno
         for entry in source_entries:
             if isinstance(entry, Mapping) and isinstance(entry.get("id"), str):
                 ids.append(entry["id"])
-    uses, definitions = ParsedMarkdown(document.text_body).footnotes()
+    uses, definitions = document.markdown.footnotes()
     body_line_offset = document.prefix.count(b"\n")
     uses = [(label, line + body_line_offset) for label, line in uses]
     definitions = [(label, line + body_line_offset) for label, line in definitions]

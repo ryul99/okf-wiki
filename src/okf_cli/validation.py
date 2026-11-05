@@ -10,8 +10,8 @@ from typing import Any
 from ruamel.yaml.comments import CommentedMap
 
 from okf_cli.diagnostics import Diagnostic
-from okf_cli.inspection import citation_diagnostics, link_diagnostics, links_for_file
-from okf_cli.markdown import ParsedMarkdown, resolve_destination
+from okf_cli.inspection import citation_diagnostics, link_diagnostics, links_for_document
+from okf_cli.markdown import resolve_destination
 from okf_cli.metadata import (
     STATUSES,
     is_stale,
@@ -20,7 +20,7 @@ from okf_cli.metadata import (
     path_fields,
     status,
 )
-from okf_cli.model import RESERVED_NAMES, Document, concept_id, iter_markdown, parse_document
+from okf_cli.model import RESERVED_NAMES, Bundle, Document, concept_id
 
 
 def _warning(file: str, code: str, message: str, field: str | None = None) -> Diagnostic:
@@ -397,7 +397,7 @@ def _validate_reserved(root: Path, target: Path, document: Document) -> list[Dia
                     "okf_version",
                 )
             )
-    headings = ParsedMarkdown(document.text_body).headings()
+    headings = document.markdown.headings()
     if target.name == "index.md" and not any(heading.text for heading in headings):
         diagnostics.append(
             _error(relative, "invalid-index", "index.md should contain a section heading")
@@ -425,9 +425,9 @@ def _validate_reserved(root: Path, target: Path, document: Document) -> list[Dia
 
 
 def _validate_inline_computation(
-    file: str, metadata: Mapping[str, Any], body: str
+    file: str, metadata: Mapping[str, Any], document: Document
 ) -> list[Diagnostic]:
-    fenced_blocks = ParsedMarkdown(body).fenced_blocks_in_section("Computation") or 0
+    fenced_blocks = document.markdown.fenced_blocks_in_section("Computation") or 0
     external_computation = metadata.get("computation")
     if external_computation is None and fenced_blocks != 1:
         return [
@@ -468,50 +468,42 @@ def _validate_path_targets(
     return diagnostics
 
 
-def _validate_concept(root: Path, target: Path, today: date) -> list[Diagnostic]:
-    file = concept_id(root, target)
-    document = parse_document(target, require_frontmatter=True)
-    if document.error or document.frontmatter is None:
-        return [_error(file, "invalid-frontmatter", document.error or "invalid frontmatter")]
+def _validate_concept(root: Path, document: Document, today: date) -> list[Diagnostic]:
+    file = concept_id(root, document.path)
     metadata = document.frontmatter
+    if document.concept_error is not None or metadata is None:
+        return [
+            _error(file, "invalid-frontmatter", document.concept_error or "invalid frontmatter")
+        ]
     diagnostics = validate_metadata(file, metadata, today)
     if metadata.get("type") == "Attested Computation":
-        diagnostics.extend(_validate_inline_computation(file, metadata, document.text_body))
-    diagnostics.extend(_validate_path_targets(root, target, file, metadata))
+        diagnostics.extend(_validate_inline_computation(file, metadata, document))
+    diagnostics.extend(_validate_path_targets(root, document.path, file, metadata))
     return diagnostics
 
 
-def _deprecated_link_warnings(root: Path, targets: list[Path]) -> list[Diagnostic]:
-    # A link target can sit outside the validated path, so its status is looked up on demand.
-    status_by_path: dict[str, str | None] = {}
+def _linked_status(bundle: Bundle, relative: str) -> str | None:
+    # A link target can sit outside the validated path, so it is read from the whole bundle.
+    linked = bundle.root / relative
+    if linked.suffix != ".md" or linked.name in RESERVED_NAMES or not linked.is_file():
+        return None
+    metadata = bundle.document(linked).frontmatter
+    return status(metadata) if metadata is not None else None
 
-    def target_status(relative: str) -> str | None:
-        if relative not in status_by_path:
-            linked = root / relative
-            document = (
-                parse_document(linked)
-                if linked.suffix == ".md" and linked.name not in RESERVED_NAMES and linked.is_file()
-                else None
-            )
-            status_by_path[relative] = (
-                status(document.frontmatter)
-                if document is not None and document.frontmatter is not None
-                else None
-            )
-        return status_by_path[relative]
 
+def _deprecated_link_warnings(bundle: Bundle, targets: list[Path]) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
     for target in targets:
         if target.name in RESERVED_NAMES:
             continue
-        document = parse_document(target)
+        document = bundle.document(target)
         if document.frontmatter is None or status(document.frontmatter) != "stable":
             continue
-        for link in links_for_file(root, target):
-            if link.resolved_path and target_status(link.resolved_path) == "deprecated":
+        for link in links_for_document(bundle.root, document):
+            if link.resolved_path and _linked_status(bundle, link.resolved_path) == "deprecated":
                 diagnostics.append(
                     _warning(
-                        concept_id(root, target),
+                        concept_id(bundle.root, target),
                         "stable-links-deprecated",
                         f"stable concept links to deprecated concept: {link.destination}",
                     )
@@ -519,17 +511,18 @@ def _deprecated_link_warnings(root: Path, targets: list[Path]) -> list[Diagnosti
     return diagnostics
 
 
-def validate_bundle(root: Path, path: Path | None, today: date) -> list[Diagnostic]:
+def validate_bundle(bundle: Bundle, path: Path | None, today: date) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
-    targets = list(iter_markdown(root, path))
+    targets = bundle.files(path)
     for target in targets:
+        document = bundle.document(target)
         if target.name in RESERVED_NAMES:
-            diagnostics.extend(_validate_reserved(root, target, parse_document(target)))
+            diagnostics.extend(_validate_reserved(bundle.root, target, document))
         else:
-            diagnostics.extend(_validate_concept(root, target, today))
-    diagnostics.extend(link_diagnostics(root, path))
-    diagnostics.extend(citation_diagnostics(root, path))
-    diagnostics.extend(_deprecated_link_warnings(root, targets))
+            diagnostics.extend(_validate_concept(bundle.root, document, today))
+    diagnostics.extend(link_diagnostics(bundle, path))
+    diagnostics.extend(citation_diagnostics(bundle, path))
+    diagnostics.extend(_deprecated_link_warnings(bundle, targets))
     return sorted(
         diagnostics,
         key=lambda item: (
