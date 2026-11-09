@@ -391,7 +391,62 @@ def test_body_guards_identity_new_warnings_dry_run_and_reserved_files(tmp_path: 
     run_okf("body", "set", "index", cwd=bundle, stdin="# Concepts\n", expected=2)
 
 
-def test_search_limit_keeps_the_first_matches_and_notes_the_rest(tmp_path: Path) -> None:
+def search_ids(bundle: Path, *arguments: str) -> list[str]:
+    results = json.loads(run_okf("search", *arguments, "--format", "json", cwd=bundle).stdout)
+    return [result["id"] for result in results]
+
+
+def test_search_orders_concepts_by_where_the_query_matches(tmp_path: Path) -> None:
+    bundle = init_bundle(tmp_path)
+    write_concept(bundle, "a.md", "type: Note", "A needle in the body.\n")
+    write_concept(bundle, "b.md", "type: Note\ndescription: A needle summary.", "Body.\n")
+    write_concept(bundle, "c.md", "type: Note\ntags:\n  - needle", "Body.\n")
+    write_concept(bundle, "d.md", "type: Note\ntitle: A needle title", "Body.\n")
+    write_concept(bundle, "e.md", "type: Note\ntitle: Needle", "Body.\n")
+
+    assert search_ids(bundle, "needle") == ["e", "d", "c", "b", "a"]
+    assert search_ids(bundle, "needle", "--limit", "1") == ["e"]
+
+
+def test_search_ranks_concepts_covering_more_query_words_first(tmp_path: Path) -> None:
+    bundle = init_bundle(tmp_path)
+    write_concept(bundle, "a.md", "type: Note\ntitle: Alpha", "Body.\n")
+    write_concept(bundle, "b.md", "type: Note", "Beta comes before alpha.\n")
+    write_concept(bundle, "c.md", "type: Note", "The alpha beta phrase.\n")
+    write_concept(bundle, "d.md", "type: Note", "Unrelated.\n")
+
+    assert search_ids(bundle, "alpha beta") == ["c", "b", "a"]
+
+
+def test_search_returns_one_record_per_concept_and_lists_matches_on_request(
+    tmp_path: Path,
+) -> None:
+    bundle = init_bundle(tmp_path)
+    write_concept(
+        bundle, "a.md", "type: Note\ntitle: A needle", "First needle.\n\nSecond needle.\n"
+    )
+    write_concept(bundle, "b.md", "type: Note", "A needle.\n")
+
+    arguments = ("search", "needle", "--limit", "1")
+    summary = json.loads(run_okf(*arguments, "--format", "json", cwd=bundle).stdout)
+    assert summary == [{"id": "a", "title": "A needle", "match_count": 3}]
+    untitled = json.loads(run_okf("search", "needle", "--format", "json", cwd=bundle).stdout)[1]
+    assert untitled == {"id": "b", "title": None, "match_count": 1}
+
+    detailed = json.loads(
+        run_okf(*arguments, "--with-matches", "--format", "json", cwd=bundle).stdout
+    )
+    assert detailed[0]["match_count"] == 3
+    assert [match["field"] for match in detailed[0]["matches"]] == ["title", "body", "body"]
+    assert detailed[0]["matches"][2]["excerpt"] == "Second needle."
+
+    table = run_okf(*arguments, cwd=bundle).stdout
+    assert "+2 more" in table
+    assert "Second needle" not in table
+    assert "Second needle" in run_okf(*arguments, "--with-matches", cwd=bundle).stdout
+
+
+def test_search_limit_keeps_the_top_concepts_and_notes_the_rest(tmp_path: Path) -> None:
     bundle = init_bundle(tmp_path)
     for name in ("a", "b", "c"):
         write_concept(bundle, f"notes/{name}.md", "type: Note", "A needle here.\n")
@@ -576,8 +631,10 @@ def test_search_links_citations_and_validation_exit_codes(tmp_path: Path) -> Non
         "```md\n[ignored](missing.md)\n```\n\n"
         "[broken](missing.md)\n\n[^used]: Evidence\n",
     )
-    results = json.loads(run_okf("search", "needle", "--format", "json", cwd=bundle).stdout)
-    body_match = next(result for result in results if result["field"] == "body")
+    results = json.loads(
+        run_okf("search", "needle", "--with-matches", "--format", "json", cwd=bundle).stdout
+    )
+    body_match = next(match for match in results[0]["matches"] if match["field"] == "body")
     assert body_match["line"] == 12
     search_table = run_okf("search", "needle", cwd=bundle).stdout
     for value in ("Location", "Field", "Match", "Needle"):

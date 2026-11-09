@@ -348,15 +348,19 @@ def cmd_body_get(args: argparse.Namespace) -> int:
     return 0
 
 
+# A type is shared by many concepts, so matching one says little about relevance.
+SEARCH_FIELD_WEIGHTS = {"title": 8, "id": 8, "tags": 6, "description": 4, "type": 2, "body": 2}
+
+
 def cmd_search(args: argparse.Namespace) -> int:
     root = _root(args, inspection=True)
     today = _today(args)
     filters = _filters(args)
-    needle = args.query if args.case_sensitive else args.query.casefold()
-    results: list[dict[str, Any]] = []
+    phrase = args.query if args.case_sensitive else args.query.casefold()
+    terms = phrase.split() or [phrase]
+    needles = list(dict.fromkeys((phrase, *terms)))
+    ranked: list[tuple[int, int, str, str | None, list[dict[str, Any]]]] = []
     for path in iter_concepts(root):
-        if args.limit is not None and len(results) > args.limit:
-            break
         document = parse_document(path)
         metadata = document.frontmatter
         if metadata is None or not filters.matches(metadata, today):
@@ -377,40 +381,76 @@ def cmd_search(args: argparse.Namespace) -> int:
                     document.text_body.splitlines(), start=first_body_line
                 )
             )
+        matches: list[dict[str, Any]] = []
+        weights: dict[str, int] = {}
         for field, text, line_number in candidates:
             haystack = text if args.case_sensitive else text.casefold()
-            position = haystack.find(needle)
-            if position >= 0:
-                results.append(
-                    {
-                        "id": concept,
-                        "field": field,
-                        "excerpt": text[max(0, position - 40) : position + len(args.query) + 40],
-                        "line": line_number,
-                    }
+            positions = {needle: haystack.find(needle) for needle in needles if needle in haystack}
+            if not positions:
+                continue
+            for needle in positions:
+                # Tags are nearly always exact, so an exact match may only break
+                # ties within its field tier, never lift it into the next one.
+                weight = SEARCH_FIELD_WEIGHTS[field] + (haystack.strip() == needle)
+                weights[needle] = max(weights.get(needle, 0), weight)
+            anchor = phrase if phrase in positions else min(positions, key=positions.__getitem__)
+            position = positions[anchor]
+            matches.append(
+                {
+                    "field": field,
+                    "excerpt": text[max(0, position - 40) : position + len(anchor) + 40],
+                    "line": line_number,
+                }
+            )
+        if matches:
+            matches.sort(
+                key=lambda match: (
+                    -SEARCH_FIELD_WEIGHTS[match["field"]],
+                    match["field"] != "title",
                 )
-    if args.limit is not None and len(results) > args.limit:
-        results = results[: args.limit]
-        print(f"note: more matches exist beyond --limit {args.limit}", file=sys.stderr)
+            )
+            coverage = sum(term in weights for term in terms)
+            title = metadata["title"] if isinstance(metadata.get("title"), str) else None
+            ranked.append((coverage, sum(weights.values()), concept, title, matches))
+    # Coverage outranks field weight: a title hit on one word should not bury a
+    # concept that contains everything the query asked for.
+    ranked.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    if args.limit is not None and len(ranked) > args.limit:
+        ranked = ranked[: args.limit]
+        print(f"note: more concepts match beyond --limit {args.limit}", file=sys.stderr)
     if _format(args) == "json":
-        _json(results)
+        _json(
+            [
+                {
+                    "id": concept,
+                    "title": title,
+                    "match_count": len(matches),
+                    **({"matches": matches} if args.with_matches else {}),
+                }
+                for _, _, concept, title, matches in ranked
+            ]
+        )
     else:
+        rows: list[tuple[str, str, str]] = []
+        for _, _, concept, _, matches in ranked:
+            shown = matches if args.with_matches else matches[:1]
+            hidden = len(matches) - len(shown)
+            suffix = f" (+{hidden} more)" if hidden else ""
+            rows.extend(
+                (
+                    f"{concept}:{match['line']}" if match["line"] is not None else concept,
+                    match["field"],
+                    f"{match['excerpt']}{suffix}",
+                )
+                for match in shown
+            )
         print_table(
             (
                 TableColumn("Location", style="cyan", ratio=2),
                 TableColumn("Field", style="magenta", no_wrap=True),
                 TableColumn("Match", ratio=5),
             ),
-            (
-                (
-                    f"{result['id']}:{result['line']}"
-                    if result["line"] is not None
-                    else result["id"],
-                    result["field"],
-                    result["excerpt"],
-                )
-                for result in results
-            ),
+            rows,
         )
     return 0
 
@@ -900,6 +940,7 @@ def build_parser() -> ArgumentParser:
     search.add_argument("query")
     search.add_argument("--metadata-only", action="store_true")
     search.add_argument("--case-sensitive", action="store_true")
+    search.add_argument("--with-matches", action="store_true")
     search.add_argument("--limit", type=_positive_int)
     _add_filters(search)
     search.set_defaults(handler=cmd_search)
